@@ -1,0 +1,205 @@
+# Umbrella dev tasks for flightlogs-mono (https://taskfile.dev).
+#
+# This runs on a SHARED host: default ports may already be in use by
+# other dev processes. Every port and container name below can be
+# overridden in a gitignored root `.env` file — see `.env.sample`.
+# Serve/db tasks check their port first and tell you which variable to
+# override instead of failing halfway through.
+version: "3"
+
+dotenv: [".env"]
+
+vars:
+  BACKEND_PORT: '{{.BACKEND_PORT | default "8210"}}'
+  FRONTEND_PORT: '{{.FRONTEND_PORT | default "8211"}}'
+  DB_PORT: '{{.DB_PORT | default "8212"}}'
+  TEST_DB_PORT: '{{.TEST_DB_PORT | default "8213"}}'
+  # Container/volume prefix; must be unique per developer on a shared
+  # host.
+  CONTAINER_PREFIX: >-
+    {{.CONTAINER_PREFIX | default (printf "flightlogs-%s" (env "USER"))}}
+  DEV_DB_NAME: "{{.CONTAINER_PREFIX}}-db"
+  TEST_DB_NAME: "{{.CONTAINER_PREFIX}}-test-db"
+  DEV_DSN: >-
+    postgresql://flightlogs:flightlogs@localhost:{{.DB_PORT}}/flightlogs
+  TEST_DSN: >-
+    postgresql://postgres-test:postgres-test@localhost:{{.TEST_DB_PORT}}/postgres-test
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  setup:
+    desc: >-
+      One-time setup: submodules, backend deps (uv), frontend deps
+      (npm), dev-auth file.
+    cmds:
+      - git submodule update --init
+      - cd backend && uv sync
+      - cd frontend && npm clean-install
+      - >-
+        test -f backend/dev-auth.json ||
+        cp backend/dev-auth.json.dist backend/dev-auth.json
+
+  db:up:
+    desc: Start dev + test PostgreSQL containers (idempotent)
+    cmds:
+      - task: db:up:dev
+      - task: db:up:test
+
+  db:up:dev:
+    internal: true
+    status:
+      - docker ps --format '{{"{{"}}.Names{{"}}"}}'
+        | grep -qx '{{.DEV_DB_NAME}}'
+    preconditions:
+      - sh: >-
+          ! (ss -tln | awk '{print $4}' | grep -q ':{{.DB_PORT}}$')
+          || (docker ps --format '{{"{{"}}.Names{{"}}"}}'
+          | grep -qx '{{.DEV_DB_NAME}}')
+        msg: >-
+          Port {{.DB_PORT}} is already in use by something else.
+          Set DB_PORT to a free port in .env (see .env.sample).
+    cmds:
+      - >-
+        docker start '{{.DEV_DB_NAME}}' 2>/dev/null ||
+        docker run -d --name '{{.DEV_DB_NAME}}'
+        -e POSTGRES_USER=flightlogs
+        -e POSTGRES_PASSWORD=flightlogs
+        -e POSTGRES_DB=flightlogs
+        -p {{.DB_PORT}}:5432
+        -v '{{.DEV_DB_NAME}}-data:/var/lib/postgresql/data'
+        docker.io/library/postgres:16
+
+  db:up:test:
+    internal: true
+    status:
+      - docker ps --format '{{"{{"}}.Names{{"}}"}}'
+        | grep -qx '{{.TEST_DB_NAME}}'
+    preconditions:
+      - sh: >-
+          ! (ss -tln | awk '{print $4}' | grep -q ':{{.TEST_DB_PORT}}$')
+          || (docker ps --format '{{"{{"}}.Names{{"}}"}}'
+          | grep -qx '{{.TEST_DB_NAME}}')
+        msg: >-
+          Port {{.TEST_DB_PORT}} is already in use by something else.
+          Set TEST_DB_PORT to a free port in .env (see .env.sample).
+    cmds:
+      # No volume: the test database is disposable by design.
+      - >-
+        docker start '{{.TEST_DB_NAME}}' 2>/dev/null ||
+        docker run -d --name '{{.TEST_DB_NAME}}'
+        -e POSTGRES_USER=postgres-test
+        -e POSTGRES_PASSWORD=postgres-test
+        -e POSTGRES_DB=postgres-test
+        -p {{.TEST_DB_PORT}}:5432
+        docker.io/library/postgres:16
+
+  db:down:
+    desc: Stop and remove the dev + test database containers
+    cmds:
+      - cmd: >-
+          docker rm -f '{{.DEV_DB_NAME}}' '{{.TEST_DB_NAME}}'
+          2>/dev/null
+        ignore_error: true
+      - cmd: >-
+          echo "Dev data volume '{{.DEV_DB_NAME}}-data' kept;"
+          "remove it with: docker volume rm '{{.DEV_DB_NAME}}-data'"
+        silent: true
+
+  dev:
+    desc: Run backend and frontend dev servers together
+    deps: [dev:backend, dev:frontend]
+
+  dev:backend:
+    desc: "Run the backend (uvicorn, reload) on :{{.BACKEND_PORT}}"
+    dir: backend
+    deps: [db:up]
+    preconditions:
+      - sh: "! (ss -tln | awk '{print $4}' | grep -q ':{{.BACKEND_PORT}}$')"
+        msg: >-
+          Port {{.BACKEND_PORT}} is already in use.
+          Set BACKEND_PORT to a free port in .env (see .env.sample).
+      - sh: test -f dev-auth.json
+        msg: "backend/dev-auth.json missing — run 'task setup' first."
+    env:
+      FLIGHTLOGS_DSN: "{{.DEV_DSN}}"
+      FLIGHTLOGS_ENVIRONMENT: development
+      FLIGHTLOGS_DEV_AUTH_FILE: dev-auth.json
+      # The following three can be overridden in .env, e.g. to point at
+      # a local Keycloak (see .env.sample).
+      FLIGHTLOGS_ADMIN_EMAIL: >-
+        {{.FLIGHTLOGS_ADMIN_EMAIL | default "admin@localhost.localdomain"}}
+      FLIGHTLOGS_OIDC_AUTHORITY: "{{.FLIGHTLOGS_OIDC_AUTHORITY}}"
+      FLIGHTLOGS_OIDC_CLIENT_ID: "{{.FLIGHTLOGS_OIDC_CLIENT_ID}}"
+    cmds:
+      - uv run wait-for-db
+      - uv run alembic upgrade head
+      - >-
+        uv run uvicorn --factory --host 0.0.0.0
+        --port {{.BACKEND_PORT}} --reload flightlogs.main:create_app
+
+  dev:frontend:
+    desc: "Run the frontend (vite) on :{{.FRONTEND_PORT}}"
+    dir: frontend
+    preconditions:
+      - sh: "! (ss -tln | awk '{print $4}' | grep -q ':{{.FRONTEND_PORT}}$')"
+        msg: >-
+          Port {{.FRONTEND_PORT}} is already in use.
+          Set FRONTEND_PORT to a free port in .env (see .env.sample).
+    cmds:
+      # remote.json is gitignored inside the submodule; generating it
+      # here points the SPA at the local backend without dirtying the
+      # submodule.
+      - mkdir -p public/config
+      - >-
+        printf '{"remoteURL": "http://localhost:%s",
+        "banner": "local dev"}\n' {{.BACKEND_PORT}}
+        > public/config/remote.json
+      - npm run dev -- --port {{.FRONTEND_PORT}} --strictPort
+
+  test:
+    desc: Run all test suites
+    cmds:
+      - task: test:backend
+      - task: test:frontend
+
+  test:backend:
+    desc: Run backend pytest against the disposable test database
+    dir: backend
+    deps: [db:up]
+    env:
+      FLIGHTLOGS_ENVIRONMENT: testing
+    cmds:
+      # pyproject pins the DSN to hostname "test-db" (devcontainer
+      # network) via pytest-env; -o replaces that ini list so the tests
+      # reach the container published on localhost instead. The
+      # environment entry it also carried moves to plain env above.
+      - uv run pytest -o 'env=FLIGHTLOGS_DSN={{.TEST_DSN}}'
+
+  test:frontend:
+    desc: Run frontend unit tests (vitest)
+    dir: frontend
+    cmds:
+      - npm run test:unit -- --run
+
+  typecheck:frontend:
+    desc: Type-check the frontend (vue-tsc)
+    dir: frontend
+    cmds:
+      - npm run type-check
+
+  lint:frontend:
+    desc: Lint (and auto-fix) the frontend
+    dir: frontend
+    cmds:
+      - npm run lint
+
+  check:
+    desc: "Aggregate gate: all tests + frontend type-check"
+    cmds:
+      - task: test
+      - task: typecheck:frontend
