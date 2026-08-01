@@ -142,11 +142,11 @@ rest of the app never imports the library directly; a `useCalendar()`
 composable owns range/navigation/colorise state. This keeps the library
 swappable and the view component small.
 
-## Migration plan (for the dedicated migration session)
+## Migration plan
 
-Work happens inside the `frontend/` submodule on a new branch off
-`develop` (suggested name: `vue3-migration`). Milestones, each leaving
-the app bootable:
+Work happens inside the `frontend/` submodule on the `vue3-migration`
+branch, forked from `develop`. **All six milestones below are done** —
+see "Migration status" for what landed and what deviates.
 
 1. **Toolchain**: vue 3.5+, vuetify 3.8+, vue-router 4, vite (current),
    `@vitejs/plugin-vue`, current `vue-tsc`, `@vue/test-utils` v2,
@@ -179,6 +179,61 @@ the app bootable:
 Do not merge or cherry-pick `origin/vuejs3`; use it only to look up how
 individual API translations were attempted.
 
+## Migration status (2026-08-01)
+
+The `vue3-migration` branch carries the whole migration. `npm run
+type-check`, `npm run lint` and `npm run test:unit -- --run` are green
+(197 specs), and the application runs against a local backend with no
+identity provider.
+
+### Where the behaviour now lives
+
+The rewrite followed the what/how split already established by the
+session refactor, so three files that used to hold everything are now
+layered:
+
+- `src/core/booking/` — what a click means, what may be saved, when a
+  deletion needs confirming. Imports no UI framework and is tested
+  without mounting anything.
+- `src/composables/useCalendar.ts` — the view, view date and visible
+  range the Vuetify 2 imperative ref used to hold, plus the
+  `UserSettings` persistence.
+- `src/composables/useBookingData.ts` — all backend reads. The old
+  `refresh()` ran six requests in sequence; the independent ones now go
+  out together.
+- `src/components/booking/BookingCalendar.vue` — the only file that
+  imports a calendar library.
+- `BookingManagementView.vue` (1131 → ~430 lines) plus
+  `parts/BookingToolbar.vue` and `parts/BookingEditor.vue` — wiring and
+  presentation only.
+
+### Deliberate deviations from the Vue 2 reference
+
+1. **The maintenance-window overlay now draws.** The shipped window is
+   22:00–06:00, which wraps midnight; the Vue 2 interval overlay
+   computed a negative height for it and drew nothing. It is now split
+   into two ranges and rendered as the documented hatch. The UTC offset
+   the backend sends (`22:00+0000`) is still read as wall-clock time,
+   exactly as before — see `origin/maint-window-timezone`.
+2. **The month grid populates its leading and trailing days.** Vue 2
+   fetched only the named month, so the adjacent-month cells a month
+   grid always renders were blank. The fetch now covers the whole grid.
+3. **"Discard unsaved edits?" is a real question.** Vue 2 raised an
+   `alert()` telling the user to save or discard, then silently dropped
+   the click. The core now asks, and answering yes proceeds.
+4. **Deleting a booking is confirmed by a view-owned dialog** rather
+   than by `ConfirmedButton`. Same `v-dialog`, same wording, same
+   buttons — the difference is that the core owns the decision, so the
+   sequence is testable without rendering a button.
+5. **Weekday headings read "Monday 27"** rather than a stacked
+   "MON / 27". vue-cal's own header layout; not worth overriding.
+
+### Known cosmetic differences
+
+None outstanding. The banner z-index, the `[object Object]` label, the
+month heading, and the editor's default date and time were all Vue 3
+regressions found during the parity pass and fixed.
+
 ## Parity verification recipe
 
 The Vue 2 reference screenshots live in
@@ -197,16 +252,26 @@ below). To reproduce the same state on any branch:
    'admin@dev-auth', issuer, display_name FROM users WHERE
    id='admin@dev-auth@dev-auth';` (upstream bug: dev-auth persists a
    double-suffixed id while writes look up the single-suffixed one).
-3. Browser login needs OIDC (the SPA has no dev-auth login): run
-   Keycloak 26 (`quay.io/keycloak/keycloak:26.2 start-dev`, port 8214,
-   admin/admin), run an adapted `backend/.devcontainer/init-keycloak.py`
-   (Keycloak URL → localhost:8214, web-client redirect →
-   `http://localhost:8211/*`), set `sslRequired=NONE` on the master and
-   test-app realms via kcadm (podman-forwarded traffic looks external),
-   and put the three `FLIGHTLOGS_OIDC_*`/`FLIGHTLOGS_ADMIN_EMAIL` vars
-   in the root `.env` (see `.env.sample`). Log in as `user`/`pass`.
+3. Log in. **No Keycloak is needed.** With no `FLIGHTLOGS_OIDC_AUTHORITY`
+   in the root `.env`, `task dev:frontend` reveals the SPA's development
+   sign-in: press "Login" in the nav drawer and pick a user from
+   `backend/dev-auth.json` (`admin` for everything). The choice is
+   remembered, so a reload does not re-ask.
+
+   To test against a real provider instead, run Keycloak 26
+   (`quay.io/keycloak/keycloak:26.2 start-dev`, port 8214, admin/admin),
+   run an adapted `backend/.devcontainer/init-keycloak.py` (Keycloak URL
+   → localhost:8214, web-client redirect → `http://localhost:8211/*`),
+   set `sslRequired=NONE` on the master and test-app realms via kcadm
+   (podman-forwarded traffic looks external), and put the three
+   `FLIGHTLOGS_OIDC_*`/`FLIGHTLOGS_ADMIN_EMAIL` vars in the root `.env`.
+   Log in as `user`/`pass`. Setting the authority switches the
+   development sign-in off; `DEV_AUTH=true` keeps both available.
 4. Select a simulator toggle — the calendar only renders bookings once
    one is active.
+
+The Vue 3 screenshots in `docs/screenshots/vue3-calendar/` were taken
+this way, in the same four states as the reference set.
 
 ## No e2e safety net
 
@@ -214,3 +279,11 @@ There are no Playwright/Cypress tests. Parity verification is manual:
 run the app (`task dev`), seed as above, and compare month/week/day
 views, event tiles, overlays and toolbar behaviour against the
 reference screenshots.
+
+`tests/components/booking/BookingCalendar.spec.ts` is the closest thing
+to a guard: it pins which props vue-cal is handed, what its callbacks
+carry and how its slot payload maps back, so a library upgrade fails
+there rather than across the whole booking screen. It is what caught
+vue-cal 5.0.1-rc.46 shipping a `vue-cal.d.ts` that names two view
+fields (`fullRangeStart`/`fullRangeEnd`) the built component does not
+have.

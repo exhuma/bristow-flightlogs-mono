@@ -22,6 +22,14 @@ vars:
   TEST_DB_NAME: "{{.CONTAINER_PREFIX}}-test-db"
   DEV_DSN: >-
     postgresql://flightlogs:flightlogs@localhost:{{.DB_PORT}}/flightlogs
+  # The SPA offers its development sign-in (HTTP Basic against
+  # backend/dev-auth.json) whenever no OIDC authority is configured, so
+  # `task dev` needs no Keycloak. Setting FLIGHTLOGS_OIDC_AUTHORITY in
+  # .env switches it back off; DEV_AUTH=true forces it on alongside a
+  # real provider.
+  DEV_AUTH: >-
+    {{.DEV_AUTH | default (empty .FLIGHTLOGS_OIDC_AUTHORITY
+    | ternary "true" "false")}}
   TEST_DSN: >-
     postgresql://postgres-test:postgres-test@localhost:{{.TEST_DB_PORT}}/postgres-test
 
@@ -150,6 +158,11 @@ tasks:
         msg: >-
           Port {{.FRONTEND_PORT}} is already in use.
           Set FRONTEND_PORT to a free port in .env (see .env.sample).
+    env:
+      # Reveals the SPA's development sign-in. It only has an effect in a
+      # dev-server build: a production build replaces import.meta.env.DEV
+      # with `false`, so the dialog and its gateway are compiled out.
+      VITE_DEV_AUTH: "{{.DEV_AUTH}}"
     cmds:
       # remote.json is gitignored inside the submodule; generating it
       # here points the SPA at the local backend without dirtying the
