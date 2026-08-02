@@ -230,9 +230,18 @@ layered:
 
 ### Known cosmetic differences
 
-None outstanding. The banner z-index, the `[object Object]` label, the
-month heading, and the editor's default date and time were all Vue 3
-regressions found during the parity pass and fixed.
+None outstanding. Two rounds of regressions were found against the
+reference screenshots and fixed:
+
+- First pass: the banner z-index, the `[object Object]` label, the
+  month heading, and the editor's default date and time.
+- Screenshot review (2026-08-02): the unreadable disabled
+  deferred-defects button, the drawer footer links pinned over the app
+  bar (`v-system-bar` became a viewport layout component in Vuetify 3),
+  and the over-tall booking sidebar (Vuetify 3's default "filled" field
+  variant; a defaults provider now restores the Vuetify 2
+  underlined/compact look). Fixing the sidebar also surfaced and fixed
+  the two date pickers still written against the Vuetify 2 API.
 
 ## Parity verification recipe
 
