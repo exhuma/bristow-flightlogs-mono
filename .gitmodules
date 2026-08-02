@@ -1,6 +1,6 @@
 [submodule "backend"]
 	path = backend
-	url = https://github.com/exhuma/bristow-flightlogs-backend.git
+	url = git@github.com:exhuma/bristow-flightlogs-backend.git
 [submodule "frontend"]
 	path = frontend
-	url = https://github.com/exhuma/bristow-flight-logs-frontend.git
+	url = git@github.com:exhuma/bristow-flight-logs-frontend.git
