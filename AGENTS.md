@@ -33,6 +33,27 @@ crew, kiosks, users, roles and validation policies.
 - `frontend/AGENTS.md` does not exist on disk. Treat **this** file as
   authoritative for cross-cutting guidance for both submodules.
 
+## Finishing a task: commit and push
+
+When a task is done (changes verified — tests/typecheck/lint green,
+and a UI change checked in a live browser per the top-level agent
+instructions), commit and push all the way up, without waiting to be
+asked each time:
+
+1. In each submodule you touched, commit on its `develop` branch and
+   `git push origin develop`.
+2. Back in the umbrella repo, `git add <submodule>` to bump its
+   pointer to the commit just pushed, commit on `master` (the
+   umbrella repo only has `master` — there is no umbrella `develop`),
+   and `git push origin master`.
+
+This is what lets the user `git pull` the umbrella repo and get a
+working tree that already points at the pushed submodule commits, no
+extra steps. See "Working with the submodules" above for when a
+pointer bump is warranted versus accidental; a task that changed
+submodule code always warrants one. Skip a submodule step only if
+that submodule had no changes this task.
+
 ## Dev environment: the root Taskfile
 
 The canonical entry points live in the root `Taskfile.yaml`
