@@ -47,7 +47,6 @@ for sid, name, tail in [
             "name": name,
             "image": PNG,
             "image_type": "image/png",
-            "default_currency": "GBP",
             "maintenance_window": {"start": "22:00+0000", "end": "06:00+0000"},
             "simulator_id": tail,
             "version": 1,
@@ -72,7 +71,6 @@ for name, color in customers:
             "color": color,
             "image": PNG,
             "image_type": "image/png",
-            "bu_rate": {"amount": 45000, "precision": 2, "currency": "GBP"},
             "version": 1,
         },
     )
