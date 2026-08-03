@@ -33,6 +33,14 @@ vars:
   TEST_DSN: >-
     postgresql://postgres-test:postgres-test@localhost:{{.TEST_DB_PORT}}/postgres-test
 
+includes:
+  backend:
+    taskfile: ./backend/Taskfile.yml
+    dir: ./backend
+  frontend:
+    taskfile: ./frontend/Taskfile.yml
+    dir: ./frontend
+
 tasks:
   default:
     desc: List available tasks
@@ -117,6 +125,16 @@ tasks:
           echo "Dev data volume '{{.DEV_DB_NAME}}-data' kept;"
           "remove it with: docker volume rm '{{.DEV_DB_NAME}}-data'"
         silent: true
+
+  db:seed:
+    desc: >-
+      Wipe and repopulate the dev database with development data
+      (normal bookings/techlogs/defects plus DST- and year-boundary
+      edge cases).
+    deps: [db:up]
+    cmds:
+      - task: backend:seed
+        vars: { SEED_DSN: "{{.DEV_DSN}}" }
 
   dev:
     desc: Run backend and frontend dev servers together

@@ -49,6 +49,9 @@ in `.env` instead of killing other processes.
   create `backend/dev-auth.json` from its `.dist` template.
 - `task db:up` / `task db:down` — disposable PostgreSQL 16 containers
   for dev and tests.
+- `task db:seed` — wipe and repopulate the dev database with
+  bookings/techlogs/defect reports covering normal cases plus fixed
+  calendar edge cases (DST transitions, a year boundary).
 - `task dev` — run backend (uvicorn, auto-reload) and frontend (vite)
   together; `task dev:backend` / `task dev:frontend` individually.
 - `task test`, `task test:backend`, `task test:frontend`,
@@ -60,9 +63,14 @@ backend, and starts the backend with `dev-auth.json` authentication
 (HTTP Basic with fake users such as `admin` or `booking`; any
 password), so no Keycloak/Entra IdP is needed.
 
-Fallback per-submodule commands (what the Taskfile calls underneath):
-backend `fab run` (hard-codes port 5000) and `uv run pytest`; frontend
-`npm run dev | test:unit | type-check | lint`.
+Per-submodule tasks live in `backend/Taskfile.yml` and
+`frontend/Taskfile.yml`, included into the root Taskfile as
+`backend:*`/`frontend:*` (`task backend:run`, `task backend:doc`,
+`task backend:generate-alembic`, `task backend:seed`, `task
+frontend:run-dev-container`); each also works standalone by running
+plain `task <name>` from inside that submodule. `uv run pytest` and
+`npm run dev | test:unit | type-check | lint` still work directly
+too.
 
 ## Backend summary
 
@@ -71,13 +79,14 @@ backend `fab run` (hard-codes port 5000) and `uv run pytest`; frontend
   PostgreSQL 16; Alembic migrations; Python 3.12; **uv is the only
   package manager** (`uv run …`, `uv sync`).
 - Configuration comes from `pydantic-settings` with the `FLIGHTLOGS_`
-  env prefix (`settings.py`). `.env` files are read by fabric tasks,
-  not by the app itself.
+  env prefix (`settings.py`). The app itself doesn't read `.env`
+  files; the root Taskfile's `dotenv: [".env"]` (and, standalone,
+  your shell) is what populates these vars.
 - Three model layers, deliberately separate: `model/` (Pydantic API
   schemas), `persistence/model/` (SQLAlchemy ORM), converted by
   `bridge/api2db.py` and `bridge/db2api.py`. A new field usually
-  touches all three **plus** an Alembic revision
-  (`fab generate-alembic --label "..."`).
+  touches all three **plus** an Alembic revision (`task
+  backend:generate-alembic LABEL="..."`).
 - Most resources are exposed via the generic CRUD router factory in
   `routers/persistent_entity.py`.
 - Auth: OIDC/Entra JWT bearer tokens in production, `dev-auth.json`
@@ -90,8 +99,8 @@ backend `fab run` (hard-codes port 5000) and `uv run pytest`; frontend
   DSN pins hostname `test-db` (devcontainer network); the root
   Taskfile overrides it to reach the `task db:up` container.
 - Style: black + isort + ruff via pre-commit, RST/Sphinx docstrings,
-  cspell. Docs are Sphinx (`fab doc`), served at `/manual` in the
-  image.
+  cspell. Docs are Sphinx (`task backend:doc`), served at `/manual` in
+  the image.
 - Releases: CalVer (`YYYY.MM.DD` in `pyproject.toml`), newest-first
   `CHANGELOG.rst`, tags `release-*`.
 
