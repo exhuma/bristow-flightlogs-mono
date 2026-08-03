@@ -11,8 +11,7 @@ both halves of the application at once:
 - `backend/` — [bristow-flightlogs-backend]
   (FastAPI + PostgreSQL, checked out on `develop`)
 - `frontend/` — [bristow-flight-logs-frontend]
-  (Vue SPA, currently checked out on
-  `copilot/prepare-for-upgrade-to-vue3`)
+  (Vue 3 SPA, checked out on `develop`)
 
 [bristow-flightlogs-backend]: https://github.com/exhuma/bristow-flightlogs-backend
 [bristow-flight-logs-frontend]: https://github.com/exhuma/bristow-flight-logs-frontend
@@ -106,17 +105,24 @@ too.
 
 ## Frontend summary
 
-- **Current state: Vue 2.7 + Vuetify 2.6** with vue-router 3, Vite 3
-  (`@vitejs/plugin-vue2`), TypeScript, Vitest 2 with
-  `@vue/test-utils` v1. npm is the only package manager.
+- **Current state: Vue 3.5 + Vuetify 3.13** with vue-router 4, Vite,
+  TypeScript, Vitest 2 with `@vue/test-utils` v2. npm is the only
+  package manager.
 - UI route: **Vuetify** (Material Design). Recorded here so agents do
-  not re-ask; the calendar is Vuetify's built-in `<v-calendar>` — no
-  third-party calendar library is installed.
-- 94 of 98 SFCs already use `<script setup lang="ts">` with typed
+  not re-ask; the calendar is **vue-cal v5** (MIT, no paid tier) —
+  Vuetify 3's labs `VCalendar` was ruled out as unusable (broken
+  slots/click events, no imperative API). It is wrapped in the
+  project-owned `src/components/booking/BookingCalendar.vue`, the only
+  file that imports the library directly, alongside a `useCalendar()`
+  composable owning view/range/navigation state — keep it that way so
+  the library stays swappable.
+- 98 of 103 SFCs use `<script setup lang="ts">` with typed
   `defineProps`/`defineEmits`. Keep that style; do not add Options API
   components.
-- No Pinia/Vuex. Shared state lives in components and `localStorage`
-  helpers (`src/core/userSettings.ts`).
+- No Pinia/Vuex. Shared state lives in components, `localStorage`
+  helpers (`src/core/userSettings.ts`), and a handful of module-level
+  singleton composables (`src/composables/useCalendar.ts`,
+  `src/composables/useBookingData.ts`).
 - Backend access is hand-written `fetch` bridges in `src/bridge/`
   (composed by `AllBridges` in `src/bridge/index.ts`); remote DTOs in
   `src/remoteModel/`, domain classes in `src/model/`. There is no
@@ -140,25 +146,6 @@ too.
   the calendar intervals.
 - Overlapping bookings are rejected server-side (`OverlapError`), and
   Lua policies may reject writes (`PolicyViolation`).
-
-## Vue 3 migration: status and goal
-
-The next big goal is finishing the migration to Vue 3 + Vuetify 3 with
-**close visual parity to the current Vue 2 calendar**. Ground truth:
-
-- Mainline (`develop`, `master`, and the checked-out branch) is still
-  Vue 2.7. The checked-out branch only contains composition-API prep.
-- `origin/vuejs3` is the only real Vue 3 attempt — a WIP from July 2024
-  that is ~2 years behind `develop`. **Do not merge it as-is**; treat
-  it as reference material.
-- `origin/vue-3` is misleadingly named: it points at a Vue 2 commit.
-
-The calendar will be rebuilt on **vue-cal v5** (Vuetify 3's labs
-VCalendar is not usable; the component must be entirely free — decided
-2026-08-01). The detailed parity checklist, the Vue-2-only chokepoint
-files, the milestone plan, and the branches worth harvesting are in
-`docs/vue3-migration.md`. Read it before starting any migration work;
-`docs/vue3-handover-prompt.md` holds the session kick-off prompt.
 
 ## Quartermaster
 
