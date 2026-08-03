@@ -30,9 +30,8 @@ crew, kiosks, users, roles and validation policies.
   commit a submodule pointer bump unless you intend to pin the umbrella
   to that exact commit.
 - The backend integration branch is `develop` (its `master` lags).
-- `frontend/AGENTS.md` is known-stale: it is truncated and only contains
-  an outdated kit list. Treat **this** file as authoritative for
-  cross-cutting guidance until it is repaired.
+- `frontend/AGENTS.md` does not exist on disk. Treat **this** file as
+  authoritative for cross-cutting guidance for both submodules.
 
 ## Dev environment: the root Taskfile
 
@@ -153,6 +152,42 @@ Instruction kits are resolved **per task**, not per project: call
 `resolve_kits(task="…")` before editing or planning, and again when the
 work changes shape. Hooks in `.claude/settings.json` enforce this. Do
 not hard-code kit lists in this file or other docs.
+
+## Incremental code-quality improvement
+
+Both submodules predate agentic coding and carry real legacy debt
+(oversized views, oversized modules). Do not run a repo-wide refactor
+sweep. Instead, leave whatever you touch a little better than you
+found it, scoped strictly to the code the current task already edits:
+tighten a name, extract a small pure helper, trim a function or file
+that's over the structural limits down toward them, remove dead code
+you notice in passing. Do not refactor code the task doesn't otherwise
+touch — see the "make minimal, focused changes" rule Quartermaster
+loads for this stack.
+
+`module-code-structure-limits`' "adopting on an existing codebase"
+guidance is the operating model for legacy-scale files like these:
+grandfather violations per file (never by raising a threshold
+repo-wide), mark exemptions so they're greppable, and retire a file's
+exemption the next time that file is touched for any reason, bringing
+just the touched portion under the limit.
+
+For the frontend specifically, `module-interaction-core`'s split
+between the *what* (intents, guarded decisions, sequences) and the
+*how* (Vue/Vuetify presentation) is worth applying incrementally too —
+a small, ported "core" function is something an agent can read and
+test without mounting a huge view. This project already has a concrete
+version of that split: `docs/behavioural-split-plan.md`, with two
+shipped reference implementations (`src/core/session/`,
+`src/core/booking/`), a survey grading which large views still fuse
+logic with presentation, and a deliberate list of views that should
+stay fused (thin CRUD, read-only — don't split those speculatively).
+When an edit lands inside one of the flagged views, prefer extracting
+the touched piece into its `src/core/<domain>/` the way the plan's
+step 0/WP1 describe, rather than adding another fused handler. The
+plan's behavior-changing extractions (WP1's sign-off-bypass question,
+WP2's newly-guarded delete) are a maintainer decision, not something
+to fold into an unrelated patch.
 
 ## Shared conventions
 
