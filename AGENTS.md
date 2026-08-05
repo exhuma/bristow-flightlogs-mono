@@ -91,6 +91,37 @@ plain `task <name>` from inside that submodule. `uv run pytest` and
 `npm run dev | test:unit | type-check | lint` still work directly
 too.
 
+## CI
+
+Each submodule has two workflows. They are per-repo: there is no
+umbrella-level CI, because it would need cross-repo tokens for two
+private submodules and would pin submodule SHAs that lag `develop`.
+
+- `ci.yml` — the quality gates. Runs on every pull request and on
+  pushes to `develop`, is `contents: read` throughout, and never
+  touches the container registry. This is what branch protection on
+  `develop` should require.
+- `release.yml` — builds and pushes the image, and creates the GitHub
+  release. Runs on `develop` and `release-*` tags only.
+  `contents: write` is elevated on the release job alone.
+
+**CI runs the Taskfile's commands, not its own variants.** When you
+change a gate, change it in both places or they drift — that drift is
+what `task check` existed to prevent and previously did not. `task
+check` is the local equivalent of `ci.yml`: lint + type-check + tests
+for both halves.
+
+Some jobs are deliberately advisory (`continue-on-error: true`)
+because their baselines are not yet clean: repo-wide mypy,
+`alembic check` drift, `sphinx -W`, bandit, pip-audit, npm audit and
+Trivy. Each carries a comment saying so. Promote one to blocking by
+deleting that line once its baseline is triaged — do not silence the
+finding instead.
+
+There is no CodeQL: both repositories are private with code scanning
+disabled, so it requires paid GitHub Code Security and would fail with
+a 403 rather than report anything.
+
 ## Backend summary
 
 - FastAPI app factory `create_app()` in
@@ -120,8 +151,19 @@ too.
 - Style: black + isort + ruff via pre-commit, RST/Sphinx docstrings,
   cspell. Docs are Sphinx (`task backend:doc`), served at `/manual` in
   the image.
+- ruff is configured in `pyproject.toml` at 80 columns. Pre-existing
+  over-long files are grandfathered in `per-file-ignores` behind a
+  `ruff-exemption:` marker — retire a file's entry when you next touch
+  it rather than sweeping the repo.
+- mypy is lenient globally (baseline ~62 errors, so the CI job is
+  advisory) with a strict opt-in allowlist under
+  `[[tool.mypy.overrides]]`. That allowlist is green and blocks. Add a
+  module to it when you next work on it.
 - Releases: CalVer (`YYYY.MM.DD` in `pyproject.toml`), newest-first
-  `CHANGELOG.rst`, tags `release-*`.
+  `CHANGELOG.rst`, tags `release-*`. CI refuses a `release-*` tag
+  whose name does not match the `pyproject.toml` version and have a
+  matching `CHANGELOG.rst` section, and builds the GitHub release body
+  from that section.
 
 ## Frontend summary
 
@@ -153,8 +195,11 @@ too.
   backend `remoteURL`, then fetches `<remoteURL>/config.json` for OIDC
   and banner settings.
 - Tests live in the top-level `frontend/tests/` tree mirroring `src/`.
-  Lint runs via pre-commit, not CI; CI runs unit tests and
-  `vue-tsc` type-checking.
+  The vitest `include` glob also matches `src/**/__tests__/`, so a
+  colocated spec is picked up as well.
+- `npm run lint` auto-fixes; `npm run lint:check` is the gate CI runs
+  and is pinned at `--max-warnings 35`. That number is a ratchet — it
+  may only ever go down.
 
 ## Backend <-> frontend contract (calendar-relevant)
 

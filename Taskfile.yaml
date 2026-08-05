@@ -217,20 +217,51 @@ tasks:
     cmds:
       - npm run test:unit -- --run
 
+  typecheck:
+    desc: Type-check both halves
+    cmds:
+      - task: typecheck:backend
+      - task: typecheck:frontend
+
+  typecheck:backend:
+    desc: Type-check the backend (mypy)
+    cmds:
+      - task: backend:typecheck
+
   typecheck:frontend:
     desc: Type-check the frontend (vue-tsc)
     dir: frontend
     cmds:
       - npm run type-check
 
+  lint:
+    desc: Lint both halves without modifying anything
+    cmds:
+      - task: lint:backend
+      - task: lint:frontend
+
+  lint:backend:
+    desc: Lint the backend (ruff + pre-commit, non-fixing)
+    cmds:
+      - task: backend:lint
+
   lint:frontend:
-    desc: Lint (and auto-fix) the frontend
+    desc: Lint the frontend (non-fixing; use fix:frontend to apply)
+    dir: frontend
+    cmds:
+      # Deliberately `lint:check`, not `lint`: the latter passes
+      # --fix, which makes it a mutation rather than a gate.
+      - npm run lint:check
+
+  fix:frontend:
+    desc: Lint the frontend and auto-fix what can be fixed
     dir: frontend
     cmds:
       - npm run lint
 
   check:
-    desc: "Aggregate gate: all tests + frontend type-check"
+    desc: "Aggregate gate: lint + type-check + all tests"
     cmds:
+      - task: lint
+      - task: typecheck
       - task: test
-      - task: typecheck:frontend
