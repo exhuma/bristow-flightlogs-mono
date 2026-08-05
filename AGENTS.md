@@ -82,6 +82,15 @@ backend, and starts the backend with `dev-auth.json` authentication
 (HTTP Basic with fake users such as `admin` or `booking`; any
 password), so no Keycloak/Entra IdP is needed.
 
+The frontend only *offers* that dev sign-in (the nav-drawer "Login"
+dialog) when the Taskfile's `DEV_AUTH` var is true, which it derives
+as `empty(FLIGHTLOGS_OIDC_AUTHORITY)` unless overridden — so if the
+root `.env` also sets `FLIGHTLOGS_OIDC_AUTHORITY` (e.g. left over from
+testing the real IdP flow), plain `task dev` shows OIDC login instead
+and fails with connection-refused when no Keycloak is running. Run
+`DEV_AUTH=true task dev` to force dev-auth on alongside that OIDC
+config.
+
 Per-submodule tasks live in `backend/Taskfile.yml` and
 `frontend/Taskfile.yml`, included into the root Taskfile as
 `backend:*`/`frontend:*` (`task backend:run`, `task backend:doc`,
