@@ -49,14 +49,12 @@ state-changing decisions the file currently fuses with presentation.
   `views/defect-reports/DefectReportManagementView.vue` (632),
   `DefectReportView.vue` (278), `parts/FullDisplay.vue` (361). Status
   transitions; **unguarded delete**; save; watch toggle; attachment
-  flows. Grade: **high**. **Partially done** (commit `69ee3fe`,
-  2026-08-06): `core/defectReport/` exists with tests; the
-  management view's delete is now guarded and its status change goes
-  through the core (permission-gated only — transition *legality*
-  beyond permission is still not encoded). Still fused:
-  `DefectReportView.vue` (untouched), `FullDisplay.vue`'s
-  `updateStatus`/`deleteComment`, and `CommentBlock.vue`'s mislabelled
-  `ConfirmedButton`.
+  flows. Grade: **high**. **Done** (commits `69ee3fe` and
+  2026-08-06's WP2-tail commit): `core/defectReport/` covers
+  select/draft/save/`changeStatus`/`deleteReport`/`deleteComment` with
+  tests, and both views + `FullDisplay.vue` + `CommentBlock.vue` route
+  through it. The watch toggle stays fused deliberately (see WP2
+  below) — it was never a guarded decision.
 - **Import/export** — ~~`views/xcom/ImportExport.vue` (304)~~
   **removed.** The whole feature (view, bridge, table components,
   route, permission) was deleted in commit `db5404b` (2026-08-03,
@@ -68,23 +66,26 @@ state-changing decisions the file currently fuses with presentation.
   Grade: **medium**. Untouched.
 - **Resource CRUD** — the six `resource-management/*Table.vue` this
   survey originally counted (course, customer, instructor, kiosk,
-  policy, simulator) plus `KioskManagementView.vue`, `NavBar.vue`'s
-  logout, `CommentBlock.vue`'s delete-comment, and
-  `PolicyEditorView.vue`'s load-template guard: **9** current
-  `ConfirmedButton` consumers, not 8. There is also a **10th,
-  previously unnoticed fused-delete pattern**: `UserTable.vue` has its
-  own hand-rolled `v-dialog` + `dialogDelete`/`deleteItem` flow that
+  policy, simulator; `KioskTable.vue`'s confirm pairs with the bridge
+  call living in `KioskManagementView.vue`), plus `NavBar.vue`'s
+  logout and `PolicyEditorView.vue`'s load-template guard: **8**
+  current `ConfirmedButton` consumers (was 9 before WP2 migrated
+  `CommentBlock.vue`'s off it). There is also a **9th, previously
+  unnoticed fused-delete pattern**: `UserTable.vue` has its own
+  hand-rolled `v-dialog` + `dialogDelete`/`deleteItem` flow that
   doesn't go through `ConfirmedButton` at all — add it to WP5's
   consumer list when that WP is picked up. Grade: **low each, high in
   aggregate**. Untouched.
-- **Small confirmations** — `NavBar.vue` (logout), `CommentBlock.vue`
-  (delete comment). One guarded decision each, fused via
-  `ConfirmedButton`. Grade: **low**. Untouched.
+- **Small confirmations** — `NavBar.vue` (logout). One guarded
+  decision, fused via `ConfirmedButton`. Grade: **low**. Untouched.
+  (`CommentBlock.vue`'s delete-comment was the other one in this
+  category; WP2 migrated it — see below.)
 
-Evidence that the fused pattern is copy-pasted rather than designed:
-both the policy editor's *load template* button and CommentBlock's
-*delete comment* button carry `data-intent="delete-booking"` — a
-pasted attribute naming an unrelated intent.
+Evidence that the fused pattern was copy-pasted rather than designed:
+both the policy editor's *load template* button and (until WP2)
+CommentBlock's *delete comment* button carried
+`data-intent="delete-booking"` — a pasted attribute naming an
+unrelated intent. The policy editor's copy is still there; see WP4.
 
 ### Deliberately left fused
 
@@ -98,6 +99,8 @@ would be speculative generality:
   `BookingSelectionView`.
 - `UserSettings` (toggle-and-persist), `AnyResource` scaffolding
   beyond the shared delete flow of WP5.
+- Defect-report watch/unwatch (`DefectReportBridge.setWatch`): a bare
+  toggle with no permission classification or confirmation to guard.
 
 If one of these later grows a guarded decision, it gets its port then —
 not before.
@@ -206,31 +209,69 @@ behaviour is now testable without mounting a 1000-line view.
 
 ## WP2 — defect-report core (`src/core/defectReport/`)
 
-**Partially done** (commit `69ee3fe`, 2026-08-06). Remaining tail:
+**Done.** Landed in two passes: commit `69ee3fe` (2026-08-06)
+migrated `DefectReportManagementView.vue`; a same-day follow-up
+finished the rest.
 
 - ~~**Delete is currently unguarded**~~ **Fixed.** `deleteReport` now
   asks `"delete-defect-report"` before removing, wired into
   `DefectReportManagementView`.
-- **Status transitions** (`updateStatus`): `changeStatus` exists in
-  the core and is used by `DefectReportManagementView`, but only
-  enforces the `edit-defect-report` permission — *which* transitions
-  are legal, and what closing a report requires, is still not
-  encoded anywhere. `FullDisplay.vue`'s own `updateStatus` (still
-  fused, still directly mutating and emitting) doesn't go through it
-  at all.
-- `DefectReportView.vue` (the standalone side-by-side route, distinct
-  from the management view) was **not touched** by the partial
-  migration — `saveComment`/`onSaveRequested` still call bridges
-  directly.
-- The comment-delete intent fused in `CommentBlock`'s `ConfirmedButton`
-  (the one carrying the mislabelled `data-intent="delete-booking"`)
-  is still unmigrated.
+- **Status transitions** (`updateStatus`/`toggleDeferred`):
+  `changeStatus` in the core enforces the `edit-defect-report`
+  permission and is now used by every status-changing button in both
+  views. *Which* transitions are legal beyond that permission check
+  is still not encoded — checked, and there is no backend Lua policy
+  for defect reports the way `TechLog.lua` governs techlog fields
+  (`backend/.../rules/bundled_scripts/validation/` has no
+  `DefectReport.lua`), so there is no concrete rule to mirror
+  client-side. This stays permission-only until a specific transition
+  rule is actually specified; inventing one would be speculation the
+  repo's own conventions warn against.
+- `FullDisplay.vue`'s `updateStatus`/`toggleDeferred` no longer build
+  a mutated copy and emit a generic `save-requested` themselves —
+  they emit a `status-change-requested` event naming the target
+  status, and the owning view (`DefectReportView.vue`, the only place
+  that renders these buttons live — `DefectReportManagementView`'s
+  embedded `FullDisplay` is read-only) calls `changeStatus` from the
+  core in response. `FullDisplay.vue` is presentation-only now: it
+  computes which status a toggle should move to (matching the
+  convention `DefectReportManagementView.vue`'s own `toggleDeferred`
+  already used) but the actual decision to persist is the core's.
+- `DefectReportView.vue` (the standalone side-by-side route) is fully
+  rewired: `onSaveRequested` now calls `saveReport`, a new
+  `onStatusChangeRequested` calls `changeStatus`, and comment deletion
+  calls the core's new `deleteComment`. It gained its own
+  `ConfirmDialog` + `useConfirmDialog` composition root — the first
+  one this view has had.
+- **`core/defectReport/defectReport.ts` gained `deleteComment`**, a
+  new decision: checks the comment's ownership (only its author may
+  delete it — previously enforced only by hiding the button, so a
+  request built by other means would have gone through), the
+  `edit-defect-report` permission, and confirms via a newly added
+  `"delete-defect-report-comment"` question (not the borrowed
+  `"delete-booking"` `CommentBlock.vue` used to carry).
+  `CommentBlock.vue` dropped its `ConfirmedButton` in favour of a
+  plain button that emits `delete-requested`; the confirm dialog and
+  the core call now live at `DefectReportView.vue`'s composition
+  root, matching every other guarded delete in the app.
+- **Watch/unwatch was surveyed and deliberately left fused.**
+  `DefectReportBridge.setWatch` has no permission classification and
+  no confirmation — it is a bare toggle with nothing for a core
+  function to guard, decide or sequence. Extracting a pass-through
+  wrapper would be exactly the speculative generality the "when not
+  to apply this" guidance warns against. Revisit only if watching
+  ever grows a real guard.
 - Attachment upload/download stays adapter-side except the decision
   parts (permission, overwrite/limit rules if any) — unchanged from
-  the original plan.
+  the original plan; no guard was found to extract there either.
 
-Remaining size: S–M. Touches `DefectReportView`, `FullDisplay`,
-`CommentBlock`.
+Deliverables added on top of the first pass:
+`core/defectReport/ports.ts` (`CommentStore`, `DeleteCommentOutcome`),
+`deleteComment` in `defectReport.ts`, 6 new specs in
+`tests/core/defectReport/defectReport.spec.ts` (24 total), and
+`"delete-defect-report-comment"` in `core/dialogue.ts`'s `QuestionId`.
+
+Size: S–M, as estimated for the remaining tail.
 
 ## WP3 — import/export core — REMOVED, feature deleted
 
@@ -262,15 +303,21 @@ copy-pasted fused flows:
 - `core/resources.ts`: `deleteEntity(label, {store, dialogue,
   permissions})` asking a parameterised `"delete-entity"` question.
 - Consumers: the six `ConfirmedButton`-based `*Table.vue` components
-  (course, customer, instructor, kiosk, policy, simulator),
-  `KioskManagementView`, `PolicyEditorView`'s load-template button
-  (see WP4 — same underlying `ConfirmedButton`, different question),
+  (course, customer, instructor, kiosk, policy, simulator; `kiosk`'s
+  confirm lives in `KioskTable.vue`, but the actual bridge call is a
+  separate handler in `KioskManagementView.vue`, so both files need
+  touching), `PolicyEditorView`'s load-template button (see WP4 —
+  same underlying `ConfirmedButton`, different question), and
   `NavBar`'s logout confirm (which instead extends the session core:
-  `logOut(gateway, dialogue)` asking `"confirm-logout"`), and
-  `CommentBlock`'s mislabelled delete-comment button (see WP2). Also
-  add `UserTable.vue`'s separate hand-rolled delete dialog, found
-  during the 2026-08-06 reconciliation — it doesn't use
-  `ConfirmedButton` at all but is the same copy-pasted pattern.
+  `logOut(gateway, dialogue)` asking `"confirm-logout"`) — **8**
+  `ConfirmedButton` consumers total. (`CommentBlock`'s mislabelled
+  delete-comment button was the same pattern but WP2 migrated it
+  already, straight to a `ConfirmDialog` + core `deleteComment` rather
+  than through this shared `deleteEntity` — one fewer consumer for
+  WP5 to touch.) Also add `UserTable.vue`'s separate hand-rolled
+  delete dialog, found during the 2026-08-06 reconciliation — it
+  doesn't use `ConfirmedButton` at all but is the same copy-pasted
+  pattern.
 - End state: **`ConfirmedButton.vue` has no consumers and is
   deleted**, together with its stray `data-intent` attributes. Its
   dialog look already lives on in `ConfirmDialog.vue`.
@@ -280,11 +327,11 @@ Size: M (mechanical, wide).
 ## Sequencing and increment rules
 
 Original order: **0 → 1 → WP1 → WP2 → WP3 → WP4 → WP5.** Revised
-2026-08-06 now that WP3 is moot, WP2 is partly done ahead of
-schedule, and WP1 has landed: **0 → 1 → WP1 → WP2 tail → WP4 → WP5.**
-Next up: WP2's tail. Value order, and
-each step leaves the app bootable and the gate green (`task check`:
-vitest, vue-tsc, lint, backend tests untouched).
+2026-08-06: WP3 is moot (feature deleted), and WP0/WP1/WP2 have all
+landed: **0 → 1 → WP1 → WP2 → WP4 → WP5.** Next up: WP4 (policy
+editor). Value order, and each step leaves the app bootable and the
+gate green (`task check`: vitest, vue-tsc, lint, backend tests
+untouched).
 
 - One work package per branch/PR off `develop`, following the repo's
   atomic-commit and Conventional-Commits rules.
@@ -304,7 +351,7 @@ vitest, vue-tsc, lint, backend tests untouched).
 | 0 enforcement + core hygiene | S | none (mechanical) | done |
 | 1 vocabulary rules | — | folded into each WP | ongoing |
 | WP1 techlog | L | sign-off bypass decision | done |
-| WP2 defect reports | M–L | delete becomes guarded | partial |
+| WP2 defect reports | M–L | delete becomes guarded | done |
 | ~~WP3 import/export~~ | ~~M~~ | ~~low~~ | removed (feature deleted) |
 | WP4 policy editor | S–M | low | not started |
 | WP5 shared delete + cleanup | M | wide but mechanical | not started |
