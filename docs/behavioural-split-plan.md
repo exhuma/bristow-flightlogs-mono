@@ -63,29 +63,29 @@ state-changing decisions the file currently fuses with presentation.
   Nothing is left to split; WP3 below is struck.
 - **Policy editor** — `views/policy/PolicyEditorView.vue` (490).
   Template-overwrite guard (via `ConfirmedButton`); save/test/format.
-  Grade: **medium**. Untouched.
+  Grade: **medium**. **Done** — see WP4.
 - **Resource CRUD** — the six `resource-management/*Table.vue` this
   survey originally counted (course, customer, instructor, kiosk,
   policy, simulator; `KioskTable.vue`'s confirm pairs with the bridge
   call living in `KioskManagementView.vue`), plus `NavBar.vue`'s
-  logout and `PolicyEditorView.vue`'s load-template guard: **8**
-  current `ConfirmedButton` consumers (was 9 before WP2 migrated
-  `CommentBlock.vue`'s off it). There is also a **9th, previously
-  unnoticed fused-delete pattern**: `UserTable.vue` has its own
-  hand-rolled `v-dialog` + `dialogDelete`/`deleteItem` flow that
-  doesn't go through `ConfirmedButton` at all — add it to WP5's
+  logout: **7** current `ConfirmedButton` consumers (was 9 before WP2
+  migrated `CommentBlock.vue` and WP4 migrated
+  `PolicyEditorView.vue`'s load-template guard off it). There is also
+  a previously unnoticed fused-delete pattern that never used
+  `ConfirmedButton` at all: `UserTable.vue` has its own hand-rolled
+  `v-dialog` + `dialogDelete`/`deleteItem` flow — add it to WP5's
   consumer list when that WP is picked up. Grade: **low each, high in
-  aggregate**. Untouched.
+  aggregate**. Untouched (WP5).
 - **Small confirmations** — `NavBar.vue` (logout). One guarded
   decision, fused via `ConfirmedButton`. Grade: **low**. Untouched.
   (`CommentBlock.vue`'s delete-comment was the other one in this
   category; WP2 migrated it — see below.)
 
 Evidence that the fused pattern was copy-pasted rather than designed:
-both the policy editor's *load template* button and (until WP2)
-CommentBlock's *delete comment* button carried
-`data-intent="delete-booking"` — a pasted attribute naming an
-unrelated intent. The policy editor's copy is still there; see WP4.
+both the policy editor's *load template* button and CommentBlock's
+*delete comment* button carried `data-intent="delete-booking"` — a
+pasted attribute naming an unrelated intent. WP2 and WP4 dropped both
+along with the `ConfirmedButton` usage that carried them.
 
 ### Deliberately left fused
 
@@ -285,14 +285,56 @@ unrelated.
 
 ## WP4 — policy editor core (`src/core/policy/`)
 
-- The **load-template guard** ("replace the script, changes lost")
-  moves from `ConfirmedButton` markup into a core decision with a
-  correctly named question (`"overwrite-policy-script"`), asked only
-  when the buffer is actually dirty — today it asks unconditionally.
-- `save` / `runTest` / `autoFormat` sequences get named outcomes; the
-  Ctrl-S key handling stays in the adapter.
+**Done.**
 
-Size: S–M.
+- The **load-template guard** ("replace the script, changes lost")
+  moved from `ConfirmedButton` markup into a core decision
+  (`loadTemplate`) asking a correctly named
+  `"overwrite-policy-script"` question, only when the buffer is
+  actually dirty — the old `ConfirmedButton` asked unconditionally.
+  Verified live: loading the template on a clean buffer skips the
+  dialog entirely; dirtying the buffer first makes it appear with the
+  same wording the button used to carry.
+- `savePolicy` / `runTest` / `autoFormat` all got named outcomes in
+  `core/policy/policy.ts`. `runTest` folds a failed request into the
+  same `ExecutionResult` shape a script's own errors use, so the
+  adapter has one rendering path for both — matching the pre-split
+  handler's fallback exactly. The Ctrl-S key handling and the Monaco
+  buffer/dirty-flag state stayed in the adapter.
+- **`savePolicy` gained a permission check that did not exist
+  before.** The route to this view only requires `view-policies` (not
+  `edit-policies`), and the pre-split `save()` had no client-side
+  gate at all -- anyone who could open the editor could attempt a
+  save and get a raw, unclassified backend 403. `savePolicy` now
+  checks `edit-policies` before ever calling the store, and the Save
+  button in the template is disabled for the same reason. A
+  behaviour change worth a maintainer's attention, if a narrower
+  read-with-attempt affordance was ever intentional.
+- **Fixed a version-staleness bug found while extracting `save`:**
+  `PolicyBridge.save()` posted the policy but discarded the response
+  body -- unlike every sibling bridge (`techlogs.ts`, `defectReport.ts`,
+  `bookings.ts`), it never passed `Policy` as the `post()` helper's
+  `localType`. The server-assigned `version` never made it back into
+  the editing session, so a *second* save in the same visit would
+  submit a stale version. `savePolicy` now syncs `policy.value` from
+  the store's response on success, the same way `saveBooking` and
+  `saveReport` already do. Verified live: two saves in one session
+  now both return `200`, versions incrementing `1 → 2 → 3`; before
+  the fix the second would have raced against a version the backend
+  had already moved past.
+- **Fixed a second, smaller gap alongside `autoFormat`:** the
+  original handler had no `.catch()` at all -- a failed format
+  request vanished as an unhandled promise rejection. `autoFormat`
+  now returns a named `{status: "failed", error}` outcome the adapter
+  surfaces through `errorCaught`.
+
+Deliverables: `core/policy/ports.ts` (`PolicyStore`, `SaveOutcome`,
+`LoadTemplateOutcome`, `FormatOutcome`), `policy.ts` (`savePolicy`,
+`loadTemplate`, `runTest`, `autoFormat`), 12 specs in
+`tests/core/policy/policy.spec.ts`, the `"overwrite-policy-script"`
+`QuestionId`, and the `PolicyBridge.save()` fix.
+
+Size: S–M, as estimated.
 
 ## WP5 — one shared delete flow for resource CRUD
 
@@ -306,18 +348,17 @@ copy-pasted fused flows:
   (course, customer, instructor, kiosk, policy, simulator; `kiosk`'s
   confirm lives in `KioskTable.vue`, but the actual bridge call is a
   separate handler in `KioskManagementView.vue`, so both files need
-  touching), `PolicyEditorView`'s load-template button (see WP4 —
-  same underlying `ConfirmedButton`, different question), and
-  `NavBar`'s logout confirm (which instead extends the session core:
-  `logOut(gateway, dialogue)` asking `"confirm-logout"`) — **8**
-  `ConfirmedButton` consumers total. (`CommentBlock`'s mislabelled
-  delete-comment button was the same pattern but WP2 migrated it
-  already, straight to a `ConfirmDialog` + core `deleteComment` rather
-  than through this shared `deleteEntity` — one fewer consumer for
-  WP5 to touch.) Also add `UserTable.vue`'s separate hand-rolled
-  delete dialog, found during the 2026-08-06 reconciliation — it
-  doesn't use `ConfirmedButton` at all but is the same copy-pasted
-  pattern.
+  touching), and `NavBar`'s logout confirm (which instead extends the
+  session core: `logOut(gateway, dialogue)` asking
+  `"confirm-logout"`) — **7** `ConfirmedButton` consumers total.
+  (`CommentBlock`'s mislabelled delete-comment button and
+  `PolicyEditorView`'s load-template button were the same pattern but
+  WP2 and WP4 migrated them already, each straight to its own
+  `ConfirmDialog` + core decision rather than through this shared
+  `deleteEntity` — two fewer consumers for WP5 to touch.) Also add
+  `UserTable.vue`'s separate hand-rolled delete dialog, found during
+  the 2026-08-06 reconciliation — it doesn't use `ConfirmedButton` at
+  all but is the same copy-pasted pattern.
 - End state: **`ConfirmedButton.vue` has no consumers and is
   deleted**, together with its stray `data-intent` attributes. Its
   dialog look already lives on in `ConfirmDialog.vue`.
@@ -327,17 +368,18 @@ Size: M (mechanical, wide).
 ## Sequencing and increment rules
 
 Original order: **0 → 1 → WP1 → WP2 → WP3 → WP4 → WP5.** Revised
-2026-08-06: WP3 is moot (feature deleted), and WP0/WP1/WP2 have all
-landed: **0 → 1 → WP1 → WP2 → WP4 → WP5.** Next up: WP4 (policy
-editor). Value order, and each step leaves the app bootable and the
-gate green (`task check`: vitest, vue-tsc, lint, backend tests
-untouched).
+2026-08-06: WP3 is moot (feature deleted), and 0/1/WP1/WP2/WP4 have
+all landed: **0 → 1 → WP1 → WP2 → WP4 → WP5.** Next up, and last:
+WP5 (shared delete flow). Value order, and each step leaves the app
+bootable and the gate green (`task check`: vitest, vue-tsc, lint,
+backend tests untouched).
 
 - One work package per branch/PR off `develop`, following the repo's
   atomic-commit and Conventional-Commits rules.
 - A WP that changes observable behaviour (the WP2 delete guard, the
-  WP1 sign-off bypass) must say so in its PR description and gets a
-  decision from the maintainer before merge.
+  WP1 sign-off bypass, WP4's new save permission check and version
+  sync-back) must say so in its PR description and gets a decision
+  from the maintainer before merge.
 - No new dependencies; no new state stores. Ports stay narrow — if an
   adapter needs the port to grow a delivery-specific parameter, the
   boundary is misplaced; move it instead.
@@ -353,5 +395,5 @@ untouched).
 | WP1 techlog | L | sign-off bypass decision | done |
 | WP2 defect reports | M–L | delete becomes guarded | done |
 | ~~WP3 import/export~~ | ~~M~~ | ~~low~~ | removed (feature deleted) |
-| WP4 policy editor | S–M | low | not started |
+| WP4 policy editor | S–M | low | done |
 | WP5 shared delete + cleanup | M | wide but mechanical | not started |
