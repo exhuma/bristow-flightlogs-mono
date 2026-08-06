@@ -1,8 +1,11 @@
 # Behavioural split: incremental plan for the remaining frontend
 
-Status: **planned, not started** (2026-08-03). This is the work package
-that follows the human validation of the Vue 3 migration. No code has
-been changed for it yet.
+Status: **in progress** (last reconciled 2026-08-06). Originally
+written 2026-08-03 as the work package that follows the human
+validation of the Vue 3 migration. Since then, other work landed
+ahead of this plan and drifted from it — this doc was reconciled
+against the actual tree on 2026-08-06 rather than rewritten from
+scratch, so the per-WP sections below note what's actually done.
 
 ## What "the split" means here
 
@@ -37,27 +40,46 @@ Graded by decision density — how many guarded, sequenced or
 state-changing decisions the file currently fuses with presentation.
 
 - **Techlog editing** — `views/techlog/TechLogDetailsView.vue`
-  (1046 lines). Quality gate on save; three sign-off flows; debounced
-  autosave; defect-dialog hand-off. Grade: **high**.
+  (1046 lines). Quality gate on save; three sign-off flows;
+  defect-dialog hand-off. Grade: **high**. (Correction from the
+  original survey: there is no debounce anywhere in this file.
+  `scheduleSave()` only flips a dirty flag that gates the save FAB;
+  saving itself is a manual button click, not a timed autosave.)
 - **Defect reports** —
   `views/defect-reports/DefectReportManagementView.vue` (632),
   `DefectReportView.vue` (278), `parts/FullDisplay.vue` (361). Status
   transitions; **unguarded delete**; save; watch toggle; attachment
-  flows. Grade: **high**.
-- **Import/export** — `views/xcom/ImportExport.vue` (304). Drop →
-  validate → preview → commit sequence; `alert()` literal in a
-  handler. Grade: **medium**.
+  flows. Grade: **high**. **Partially done** (commit `69ee3fe`,
+  2026-08-06): `core/defectReport/` exists with tests; the
+  management view's delete is now guarded and its status change goes
+  through the core (permission-gated only — transition *legality*
+  beyond permission is still not encoded). Still fused:
+  `DefectReportView.vue` (untouched), `FullDisplay.vue`'s
+  `updateStatus`/`deleteComment`, and `CommentBlock.vue`'s mislabelled
+  `ConfirmedButton`.
+- **Import/export** — ~~`views/xcom/ImportExport.vue` (304)~~
+  **removed.** The whole feature (view, bridge, table components,
+  route, permission) was deleted in commit `db5404b` (2026-08-03,
+  "feat!: remove the import/export (xcom) feature") — the backend
+  dropped xcom and the client confirmed the feature was obsolete.
+  Nothing is left to split; WP3 below is struck.
 - **Policy editor** — `views/policy/PolicyEditorView.vue` (490).
   Template-overwrite guard (via `ConfirmedButton`); save/test/format.
-  Grade: **medium**.
-- **Resource CRUD** — six `resource-management/*Table.vue` plus their
-  views, and `KioskManagementView.vue`. The same delete-with-confirm,
-  copy-pasted; the confirm lives in the table and the bridge call in
-  the view, so no unit owns the sequence. Grade: **low each, high in
-  aggregate**.
+  Grade: **medium**. Untouched.
+- **Resource CRUD** — the six `resource-management/*Table.vue` this
+  survey originally counted (course, customer, instructor, kiosk,
+  policy, simulator) plus `KioskManagementView.vue`, `NavBar.vue`'s
+  logout, `CommentBlock.vue`'s delete-comment, and
+  `PolicyEditorView.vue`'s load-template guard: **9** current
+  `ConfirmedButton` consumers, not 8. There is also a **10th,
+  previously unnoticed fused-delete pattern**: `UserTable.vue` has its
+  own hand-rolled `v-dialog` + `dialogDelete`/`deleteItem` flow that
+  doesn't go through `ConfirmedButton` at all — add it to WP5's
+  consumer list when that WP is picked up. Grade: **low each, high in
+  aggregate**. Untouched.
 - **Small confirmations** — `NavBar.vue` (logout), `CommentBlock.vue`
   (delete comment). One guarded decision each, fused via
-  `ConfirmedButton`. Grade: **low**.
+  `ConfirmedButton`. Grade: **low**. Untouched.
 
 Evidence that the fused pattern is copy-pasted rather than designed:
 both the policy editor's *load template* button and CommentBlock's
@@ -82,29 +104,50 @@ not before.
 
 ## Step 0 — make the boundary mechanical (prerequisite)
 
-Do this first so every later step is checked by the build rather than
-by review discipline.
+**Done** (2026-08-06). What actually happened, vs. the original plan:
 
-1. **Evict delivery code that already sits inside `src/core/`**, or the
-   lint rule below can never be enabled:
-   - `core/downloads.ts` — DOM (`document.createElement`) and HTTP
-     (`authedFetch`). Move to `src/adapters/downloads.ts` (new
-     directory for delivery helpers that are not components).
-   - `core/versionChecker.ts` — `window.setInterval` + `fetch`. Same
-     destination.
-   - `core/graphing.ts` — imports echarts types. Move next to the
-     chart components (`src/components/charts/graphing.ts`).
-   Update importers; no behaviour change.
-2. **Add the ESLint fence** scoped to `src/core/**`:
-   `no-restricted-imports` banning `vue`, `vuetify*`, `vue-router`,
-   `@/components/*`, `@/views/*`, `@/composables/*`, `@/bridge*`,
-   `@/auth/*` (ports only — the session core already talks to auth
-   through `SessionGateway`). CI fails on violation.
-3. **Document the composition-root convention**: views construct the
-   port implementations (as `BookingManagementView` does today) and are
-   the only place core and delivery meet.
+1. **Evicted delivery code that sat inside `src/core/`:**
+   - `core/downloads.ts` → `src/adapters/downloads.ts`, as planned.
+   - `core/graphing.ts` → `src/components/charts/graphing.ts`, as
+     planned.
+   - `core/versionChecker.ts` had **zero importers anywhere in the
+     tree** (dead code) — it was deleted instead of relocated, rather
+     than moving unreachable code into the new `src/adapters/`
+     directory.
+2. **Added the ESLint fence** scoped to `src/core/**/*.ts`, via an
+   `overrides` block in `.eslintrc.cjs` (the config is legacy
+   `.eslintrc`, not flat config). Uses
+   `@typescript-eslint/no-restricted-imports` rather than the base
+   `no-restricted-imports`, because it supports `allowTypeImports` —
+   needed for `core/permissions.ts`'s type-only
+   `import type { Permission } from "@/auth/permissions"`, the one
+   sanctioned exception below. Bans value imports of `vue`,
+   `vuetify*`, `vue-router`, `@/components/*`, `@/views/*`,
+   `@/composables/*`, `@/bridge*`, `@/auth/*`. Fixing this up also
+   caught `core/session/ports.ts` importing `Permission` value-style
+   instead of `import type` — a one-line fix.
+3. **Composition-root convention** (documented here, since
+   `docs/vue3-migration.md` referenced by the original plan does not
+   exist, and `main.ts`'s own "composition root" comment refers to
+   app bootstrap, a different sense of the term):
 
-Size: S. Pure refactor + config; gate stays green.
+   > A view that pairs with a `src/core/<domain>/` module constructs
+   > the concrete port implementations it needs — a `<Domain>Store`
+   > wrapping the relevant bridge calls, `useConfirmDialog()`'s
+   > `Dialogue` — and passes them into the core's functions. This is
+   > the *only* place core and delivery are allowed to meet.
+   > `BookingManagementView.vue` and `App.vue` (for `SessionGateway`)
+   > are the reference shape. Core modules never construct or import
+   > their own port implementations; ports are always injected by the
+   > caller.
+4. Session core test gap closed: `src/core/booking/` and
+   `src/core/defectReport/` already had specs under `tests/core/`;
+   `src/core/session/` did not. Added
+   `tests/core/session/session.spec.ts` (fake `SessionGateway` /
+   `Dialogue`, mirroring `tests/core/booking/booking.spec.ts`'s
+   template) covering `logIn`, `logOut`, `pairKiosk`.
+
+Size: S, as estimated. Pure refactor + config; gate stayed green.
 
 ## Step 1 — shared vocabulary rules (applies to every WP)
 
@@ -151,38 +194,41 @@ testable without mounting a 1000-line view.
 
 ## WP2 — defect-report core (`src/core/defectReport/`)
 
-- **Delete is currently unguarded**: `onDeleteRequested` calls the
-  bridge directly — no confirmation anywhere in the chain, unlike every
-  resource table. The core models `deleteReport` with a
-  `"delete-defect-report"` question; the adapter phrases it. (This is
-  a deliberate behaviour change — flag it in the PR.)
-- **Status transitions** (`updateStatus`): which transitions are legal,
-  and what closing a report requires, become a core decision instead
-  of whatever the button row allows.
-- **Save + validity**, **watch/unwatch**, and the comment-delete
-  intent currently fused in `CommentBlock`'s `ConfirmedButton` (the
-  mislabelled one) all route through the same core.
+**Partially done** (commit `69ee3fe`, 2026-08-06). Remaining tail:
+
+- ~~**Delete is currently unguarded**~~ **Fixed.** `deleteReport` now
+  asks `"delete-defect-report"` before removing, wired into
+  `DefectReportManagementView`.
+- **Status transitions** (`updateStatus`): `changeStatus` exists in
+  the core and is used by `DefectReportManagementView`, but only
+  enforces the `edit-defect-report` permission — *which* transitions
+  are legal, and what closing a report requires, is still not
+  encoded anywhere. `FullDisplay.vue`'s own `updateStatus` (still
+  fused, still directly mutating and emitting) doesn't go through it
+  at all.
+- `DefectReportView.vue` (the standalone side-by-side route, distinct
+  from the management view) was **not touched** by the partial
+  migration — `saveComment`/`onSaveRequested` still call bridges
+  directly.
+- The comment-delete intent fused in `CommentBlock`'s `ConfirmedButton`
+  (the one carrying the mislabelled `data-intent="delete-booking"`)
+  is still unmigrated.
 - Attachment upload/download stays adapter-side except the decision
-  parts (permission, overwrite/limit rules if any).
+  parts (permission, overwrite/limit rules if any) — unchanged from
+  the original plan.
 
-Size: M–L. Touches `DefectReportManagementView`, `DefectReportView`,
-`FullDisplay`, `CommentBlock`.
+Remaining size: S–M. Touches `DefectReportView`, `FullDisplay`,
+`CommentBlock`.
 
-## WP3 — import/export core (`src/core/importing/`)
+## WP3 — import/export core — REMOVED, feature deleted
 
-A genuine multi-step sequence with observable intermediate state:
+~~A genuine multi-step sequence with observable intermediate state:
 drop file → accept/reject type → build preview → user reviews →
-commit → report. Today the type rejection is a bare
-`alert("Please drop an Excel file.")` — a user-facing string in a
-handler.
-
-- Core: `startImport(file, ports)` returning
-  `{ status: "rejected", reason: "not-an-excel-file" }` or a preview
-  handle; `commitBookings` / `commitTechlogs` with named outcomes.
-- Adapter: the view phrases the rejection (inline `v-alert`, not
-  `window.alert`) and renders the preview tables.
-
-Size: M.
+commit → report.~~ Moot: the entire import/export (xcom) feature —
+view, bridge, table components, route, permission — was deleted in
+commit `db5404b` (2026-08-03). Nothing left to split. Kept here,
+struck, so this WP number isn't silently reused for something
+unrelated.
 
 ## WP4 — policy editor core (`src/core/policy/`)
 
@@ -198,15 +244,21 @@ Size: S–M.
 ## WP5 — one shared delete flow for resource CRUD
 
 Not a full split per resource — that would be the over-application the
-pattern warns against. Instead, one small core function replaces six
+pattern warns against. Instead, one small core function replaces the
 copy-pasted fused flows:
 
 - `core/resources.ts`: `deleteEntity(label, {store, dialogue,
   permissions})` asking a parameterised `"delete-entity"` question.
-- Consumers: the six `*Table.vue` components (course, customer,
-  instructor, kiosk, policy, simulator), `KioskManagementView`, and
+- Consumers: the six `ConfirmedButton`-based `*Table.vue` components
+  (course, customer, instructor, kiosk, policy, simulator),
+  `KioskManagementView`, `PolicyEditorView`'s load-template button
+  (see WP4 — same underlying `ConfirmedButton`, different question),
   `NavBar`'s logout confirm (which instead extends the session core:
-  `logOut(gateway, dialogue)` asking `"confirm-logout"`).
+  `logOut(gateway, dialogue)` asking `"confirm-logout"`), and
+  `CommentBlock`'s mislabelled delete-comment button (see WP2). Also
+  add `UserTable.vue`'s separate hand-rolled delete dialog, found
+  during the 2026-08-06 reconciliation — it doesn't use
+  `ConfirmedButton` at all but is the same copy-pasted pattern.
 - End state: **`ConfirmedButton.vue` has no consumers and is
   deleted**, together with its stray `data-intent` attributes. Its
   dialog look already lives on in `ConfirmDialog.vue`.
@@ -215,30 +267,31 @@ Size: M (mechanical, wide).
 
 ## Sequencing and increment rules
 
-Order: **0 → 1 → WP1 → WP2 → WP3 → WP4 → WP5.** Value order, and each
-step leaves the app bootable and the gate green (`task check`: vitest,
-vue-tsc, lint, backend tests untouched).
+Original order: **0 → 1 → WP1 → WP2 → WP3 → WP4 → WP5.** Revised
+2026-08-06 now that WP3 is moot and WP2 is partly done ahead of
+schedule: **0 → 1 → WP1 → WP2 tail → WP4 → WP5.** Value order, and
+each step leaves the app bootable and the gate green (`task check`:
+vitest, vue-tsc, lint, backend tests untouched).
 
-- One work package per branch/PR off `vue3-migration` (or its merge
-  target once the migration lands), following the repo's atomic-commit
-  and Conventional-Commits rules.
+- One work package per branch/PR off `develop`, following the repo's
+  atomic-commit and Conventional-Commits rules.
 - A WP that changes observable behaviour (the WP2 delete guard, the
   WP1 sign-off bypass) must say so in its PR description and gets a
   decision from the maintainer before merge.
 - No new dependencies; no new state stores. Ports stay narrow — if an
   adapter needs the port to grow a delivery-specific parameter, the
   boundary is misplaced; move it instead.
-- Update `docs/vue3-migration.md`'s status section (or successor doc)
-  as packages land.
+- Update this doc's status as packages land (`docs/vue3-migration.md`,
+  referenced by the original plan, does not exist).
 
 ## Rough sizing
 
-| Step | Size | Risk |
-| --- | --- | --- |
-| 0 enforcement + core hygiene | S | none (mechanical) |
-| 1 vocabulary rules | — | folded into each WP |
-| WP1 techlog | L | sign-off bypass decision |
-| WP2 defect reports | M–L | delete becomes guarded |
-| WP3 import/export | M | low |
-| WP4 policy editor | S–M | low |
-| WP5 shared delete + cleanup | M | wide but mechanical |
+| Step | Size | Risk | Status |
+| --- | --- | --- | --- |
+| 0 enforcement + core hygiene | S | none (mechanical) | done |
+| 1 vocabulary rules | — | folded into each WP | ongoing |
+| WP1 techlog | L | sign-off bypass decision | in progress |
+| WP2 defect reports | M–L | delete becomes guarded | partial |
+| ~~WP3 import/export~~ | ~~M~~ | ~~low~~ | removed (feature deleted) |
+| WP4 policy editor | S–M | low | not started |
+| WP5 shared delete + cleanup | M | wide but mechanical | not started |
