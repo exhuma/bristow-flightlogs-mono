@@ -165,32 +165,44 @@ Size: S, as estimated. Pure refactor + config; gate stayed green.
 
 ## WP1 — techlog core (`src/core/techlog/`)
 
-The largest remaining chokepoint. `TechLogDetailsView.vue` fuses:
+**Done** (2026-08-06). The largest remaining chokepoint.
+`TechLogDetailsView.vue` fused:
 
 - **The quality rule, twice.** "Quality ≤ 3 requires discrepancy
-  notes" lives once as a form validator (`maybeRequireNotes`) and
+  notes" lived once as a form validator (`maybeRequireNotes`) and
   again as a save guard in `saveTechLog()` — knowledge duplication
   with slightly different thresholds (`> 20 chars` vs `non-empty`).
-  The core states it once; both the validator and the save guard call
-  it.
+  **Resolved**: `qualityRule()` in the core is the single source of
+  truth, unified on the stricter `> 20 chars` threshold; both the
+  validator and the save guard now call it.
 - **Three sign-off intents** (discrepancy, instructor, technician).
-  `discrepancySignOff()` saves through its own path and **bypasses the
-  quality gate** that `saveTechLog()` enforces — almost certainly a
-  latent bug. The core gives all three the same
-  `signOff(kind, context)` sequence; whether the bypass was intended
-  is a question to settle during review, not silently preserved or
-  silently fixed.
-- **The autosave sequence** (`scheduleSave` → debounce → save →
-  sync-back). Becomes an explicit core decision ("is there anything to
-  save, is it allowed, what happened"), with the debounce timer
-  staying in the adapter (timing is delivery).
+  `discrepancySignOff()` saved through its own path and **bypassed
+  the quality gate** that `saveTechLog()` enforced — a latent bug.
+  **Resolved, deliberately (maintainer decision, not silently
+  preserved)**: all three now go through one `signOff(kind, context)`
+  sequence, gated identically. Verified live: a discrepancy sign-off
+  attempt at quality ≤ 3 with empty notes is now blocked with the
+  same warning the manual save shows, and a valid sign-off after
+  adding notes succeeds.
+- A second bug surfaced *by* the fix, and fixed alongside it:
+  `signOff()` originally applied the toggle to the local `Techlog`
+  object before checking the gate, so a rejected sign-off still left
+  the UI showing "Undo Sign-Off" with nothing to revert it. The gate
+  check now runs first, before any mutation.
+- **The autosave sequence.** Correction to this plan's original
+  description: there was no debounce anywhere in this file —
+  `scheduleSave()` only flipped a dirty flag ahead of a manual
+  save-button click. That flag (`saveNeeded`/`saveInProgress`) stayed
+  in the adapter as pure UI feedback state; only the save/sign-off
+  *decision* sequences moved into the core.
 
-Deliverables: `core/techlog/ports.ts` (`TechlogStore`), `techlog.ts`
-(`saveTechlog`, `signOff`, `qualityRule`), specs, and the view rewired
-as adapter. The view keeps its layout; only handlers change.
+Deliverables: `core/techlog/ports.ts` (`TechlogStore`, `SaveOutcome`,
+`SignOffKind`), `techlog.ts` (`saveTechlog`, `signOff`, `qualityRule`),
+`tests/core/techlog/techlog.spec.ts` (14 specs), and the view rewired
+as adapter. The view kept its layout; only handlers changed.
 
-Size: L. Highest payoff — the sign-off/quality behaviour becomes
-testable without mounting a 1000-line view.
+Size: L, as estimated. Highest payoff — the sign-off/quality
+behaviour is now testable without mounting a 1000-line view.
 
 ## WP2 — defect-report core (`src/core/defectReport/`)
 
@@ -268,8 +280,9 @@ Size: M (mechanical, wide).
 ## Sequencing and increment rules
 
 Original order: **0 → 1 → WP1 → WP2 → WP3 → WP4 → WP5.** Revised
-2026-08-06 now that WP3 is moot and WP2 is partly done ahead of
-schedule: **0 → 1 → WP1 → WP2 tail → WP4 → WP5.** Value order, and
+2026-08-06 now that WP3 is moot, WP2 is partly done ahead of
+schedule, and WP1 has landed: **0 → 1 → WP1 → WP2 tail → WP4 → WP5.**
+Next up: WP2's tail. Value order, and
 each step leaves the app bootable and the gate green (`task check`:
 vitest, vue-tsc, lint, backend tests untouched).
 
@@ -290,7 +303,7 @@ vitest, vue-tsc, lint, backend tests untouched).
 | --- | --- | --- | --- |
 | 0 enforcement + core hygiene | S | none (mechanical) | done |
 | 1 vocabulary rules | — | folded into each WP | ongoing |
-| WP1 techlog | L | sign-off bypass decision | in progress |
+| WP1 techlog | L | sign-off bypass decision | done |
 | WP2 defect reports | M–L | delete becomes guarded | partial |
 | ~~WP3 import/export~~ | ~~M~~ | ~~low~~ | removed (feature deleted) |
 | WP4 policy editor | S–M | low | not started |
