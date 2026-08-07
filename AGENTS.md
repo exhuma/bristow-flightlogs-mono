@@ -251,18 +251,23 @@ For the frontend specifically, `module-interaction-core`'s split
 between the *what* (intents, guarded decisions, sequences) and the
 *how* (Vue/Vuetify presentation) is worth applying incrementally too —
 a small, ported "core" function is something an agent can read and
-test without mounting a huge view. This project already has a concrete
-version of that split: `docs/behavioural-split-plan.md`, with two
-shipped reference implementations (`src/core/session/`,
-`src/core/booking/`), a survey grading which large views still fuse
-logic with presentation, and a deliberate list of views that should
-stay fused (thin CRUD, read-only — don't split those speculatively).
-When an edit lands inside one of the flagged views, prefer extracting
-the touched piece into its `src/core/<domain>/` the way the plan's
-step 0/WP1 describe, rather than adding another fused handler. The
-plan's behavior-changing extractions (WP1's sign-off-bypass question,
-WP2's newly-guarded delete) are a maintainer decision, not something
-to fold into an unrelated patch.
+test without mounting a huge view. The frontend's behavioural split
+(tracked to completion in a since-deleted planning doc) landed across
+every domain a 2026-08 survey identified: `src/core/session/`,
+`src/core/booking/`, `src/core/defectReport/`, `src/core/techlog/`,
+`src/core/policy/`, and the shared delete flow in
+`src/core/resources.ts` are the reference implementations. Thin CRUD
+and read-only views (dashboards, pick-and-navigate lists,
+toggle-and-persist settings) were deliberately left fused — extracting
+ports for them would be speculative generality. When an edit lands
+inside a view that still fuses a guarded, sequenced or state-changing
+decision with its presentation, prefer extracting the touched piece
+into its own `src/core/<domain>/` the way the shipped examples do,
+rather than adding another fused handler. A behavior-changing
+extraction (a newly-enforced permission check, a previously-unguarded
+action becoming guarded, a fixed bypass) is a maintainer decision, not
+something to fold into an unrelated patch — say so explicitly in the
+PR/commit.
 
 ## Shared conventions
 
