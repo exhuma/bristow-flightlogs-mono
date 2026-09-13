@@ -76,11 +76,12 @@ in `.env` instead of killing other processes.
 - `task test`, `task test:backend`, `task test:frontend`,
   `task typecheck:frontend`, `task lint:frontend`, `task check`.
 
-The Taskfile wires the two halves together in dev: it generates the
-gitignored `frontend/public/config/remote.json` pointing at the local
-backend, and starts the backend with `dev-auth.json` authentication
-(HTTP Basic with fake users such as `admin` or `booking`; any
-password), so no Keycloak/Entra IdP is needed.
+The Taskfile wires the two halves together in dev by starting the
+backend with `dev-auth.json` authentication (HTTP Basic with fake users
+such as `admin` or `booking`; any password), so no Keycloak/Entra IdP
+is needed. The SPA addresses the backend at `/api`, which in dev is
+Vite's `server.proxy` forwarding to `BACKEND_PORT` — in production one
+process serves both, so there is nothing to configure either way.
 
 The frontend only *offers* that dev sign-in (the nav-drawer "Login"
 dialog) when the Taskfile's `DEV_AUTH` var is true, which it derives
@@ -158,8 +159,8 @@ a 403 rather than report anything.
   DSN pins hostname `test-db` (devcontainer network); the root
   Taskfile overrides it to reach the `task db:up` container.
 - Style: black + isort + ruff via pre-commit, RST/Sphinx docstrings,
-  cspell. Docs are Sphinx (`task backend:doc`), served at `/manual` in
-  the image.
+  cspell. Docs are Sphinx (`task backend:doc`), served at `/api/manual`
+  in the image.
 - ruff is configured in `pyproject.toml` at 80 columns. Pre-existing
   over-long files are grandfathered in `per-file-ignores` behind a
   `ruff-exemption:` marker — retire a file's entry when you next touch
@@ -199,10 +200,12 @@ a 403 rather than report anything.
   `src/remoteModel/`, domain classes in `src/model/`. There is no
   OpenAPI codegen — bridges mirror the backend `model/` schemas by
   hand, so API changes need matching edits on both sides.
-- Runtime config is two-layered: the SPA fetches its own
-  `/config/remote.json` (gitignored, generated in dev) to learn the
-  backend `remoteURL`, then fetches `<remoteURL>/config.json` for OIDC
-  and banner settings.
+- The SPA addresses the backend at `/api` on its own origin
+  (`API_BASE_URL` in `src/core/config.ts`) and fetches
+  `/api/config.json` for OIDC and banner settings. The base is absolute
+  (`window.location.origin + "/api"`), not the bare path, because a
+  dozen call sites build requests with ``new URL(`${remoteUrl}/…`)``
+  and the one-argument `URL` constructor throws without a scheme.
 - Tests live in the top-level `frontend/tests/` tree mirroring `src/`.
   The vitest `include` glob also matches `src/**/__tests__/`, so a
   colocated spec is picked up as well.
@@ -212,7 +215,14 @@ a 403 rather than report anything.
 
 ## Backend <-> frontend contract (calendar-relevant)
 
-- The calendar view fetches `GET /booking?start=…&end=…&simulator-id=…`
+- One container, one origin. The API lives below `/api`
+  (`/api/docs`, `/api/openapi.json`, `/api/manual`, `/api/livez`,
+  `/api/readyz`, `/api/healthz`); everything else belongs to the SPA.
+  A test in `backend/tests/test_routing.py` asserts no route escapes
+  the prefix, because the history-mode fallback's safety depends on it.
+  The fallback only answers with `index.html` when the client asks for
+  HTML, so a missing sub-resource still 404s.
+- The calendar view fetches `GET /api/booking?start=…&end=…&simulator-id=…`
   for the visible range; bookings carry a `time_slot` range, `version`
   (optimistic locking) and either full details or an opaque
   `BookingPublic` ("busy") shape depending on the caller's permissions.
