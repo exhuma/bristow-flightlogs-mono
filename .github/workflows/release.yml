@@ -1,0 +1,277 @@
+---
+# Builds and publishes the release image (and the maintenance-ops
+# image), and creates the GitHub release. This repo owns the product's
+# CalVer version and changelog, since it is the only place that knows
+# which pair of submodule commits shipped together -- see AGENTS.md.
+name: Release
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - "release-*"
+  workflow_dispatch: null
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Never cancel a release midway through pushing an image.
+  cancel-in-progress: false
+
+jobs:
+  verify-version:
+    name: Verify version
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/release-')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches VERSION
+        run: |
+          tag="${GITHUB_REF_NAME#release-}"
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [ "$tag" != "$version" ]; then
+            echo "Tag ${tag} != VERSION file content ${version}"
+            exit 1
+          fi
+      - name: CHANGELOG has an entry for this version
+        run: |
+          version="${GITHUB_REF_NAME#release-}"
+          if ! grep -qx "$version" CHANGELOG.rst; then
+            echo "No CHANGELOG.rst section for ${version}"
+            exit 1
+          fi
+
+  build-and-push:
+    name: Build and push images
+    runs-on: ubuntu-latest
+    needs:
+      - verify-version
+    if: >-
+      always() &&
+      (needs.verify-version.result == 'success' ||
+      needs.verify-version.result == 'skipped')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure submodule access
+        run: |
+          git config --global \
+            url."https://x-access-token:${{ secrets.SUBMODULE_TOKEN }}@github.com/".insteadOf \
+            "git@github.com:"
+      - name: Checkout submodules
+        run: git submodule update --init --depth 1
+      - name: Verify registry configuration
+        # An empty secret collapses the image reference to
+        # "//flightlogs:tag", which the daemon rejects as an invalid
+        # reference -- often surfacing as a confusing auth error
+        # against Docker Hub rather than a naming problem.
+        env:
+          URL: ${{ secrets.DOCKER_REGISTRY_URL }}
+          NAMESPACE: ${{ secrets.DOCKER_REGISTRY_NAMESPACE }}
+        run: |
+          test -n "$URL" || { echo "DOCKER_REGISTRY_URL is unset"; exit 1; }
+          test -n "$NAMESPACE" || {
+            echo "DOCKER_REGISTRY_NAMESPACE is unset"; exit 1; }
+      - name: Resolve the application version
+        id: app-version
+        run: echo "value=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+      - name: Build metadata
+        id: build
+        run: echo "date=$(date -Iminutes)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to the registry
+        # Before the build, not after: build-push-action builds and
+        # pushes in a single step.
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.DOCKER_REGISTRY_URL }}
+          username: ${{ secrets.DOCKER_REGISTRY_USER }}
+          password: ${{ secrets.DOCKER_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: >-
+            ${{ secrets.DOCKER_REGISTRY_URL }}/${{
+            secrets.DOCKER_REGISTRY_NAMESPACE }}/flightlogs
+          tags: |
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/master' }}
+            type=match,pattern=release-(.*),group=1
+            type=sha,format=long
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: prod
+          push: true
+          build-args: |
+            APP_VERSION=${{ steps.app-version.outputs.value }}
+            VITE_BUILD_REF=${{ github.sha }}
+            VITE_BUILD_DATE=${{ steps.build.outputs.date }}
+            NODE_OPTIONS=--max_old_space_size=8192
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Explicitly off: the default (mode=min) produces a
+          # multi-manifest index that older private registries reject
+          # with unhelpful errors.
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - id: meta-ops
+        uses: docker/metadata-action@v5
+        with:
+          images: >-
+            ${{ secrets.DOCKER_REGISTRY_URL }}/${{
+            secrets.DOCKER_REGISTRY_NAMESPACE }}/flightlogs-ops
+          tags: |
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/master' }}
+            type=match,pattern=release-(.*),group=1
+            type=sha,format=long
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ops/Dockerfile
+          push: true
+          tags: ${{ steps.meta-ops.outputs.tags }}
+          labels: ${{ steps.meta-ops.outputs.labels }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Extract reproduction artifacts
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: export
+          outputs: type=local,dest=./dist
+          cache-from: type=gha
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reproduction-artifacts
+          path: |
+            dist/requirements.txt
+            dist/package-lock.json
+
+  scan-images:
+    name: Scan images
+    runs-on: ubuntu-latest
+    needs:
+      - build-and-push
+    steps:
+      - uses: aquasecurity/trivy-action@0.28.0
+        # Advisory to begin with: promote to a failing gate once the
+        # baseline is known and triaged.
+        continue-on-error: true
+        with:
+          image-ref: >-
+            ${{ secrets.DOCKER_REGISTRY_URL }}/${{
+            secrets.DOCKER_REGISTRY_NAMESPACE }}/flightlogs:sha-${{
+            github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+      - uses: aquasecurity/trivy-action@0.28.0
+        continue-on-error: true
+        with:
+          image-ref: >-
+            ${{ secrets.DOCKER_REGISTRY_URL }}/${{
+            secrets.DOCKER_REGISTRY_NAMESPACE }}/flightlogs-ops:sha-${{
+            github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+
+  build-documentation:
+    name: Build documentation
+    runs-on: ubuntu-latest
+    env:
+      TZ: UTC
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure submodule access
+        run: |
+          git config --global \
+            url."https://x-access-token:${{ secrets.SUBMODULE_TOKEN }}@github.com/".insteadOf \
+            "git@github.com:"
+      - name: Checkout submodules
+        run: git submodule update --init --depth 1
+      - name: Use the umbrella's changelog
+        # Matches what the image build does: the umbrella owns the
+        # changelog now, so the shipped manual should show it, not
+        # backend's own placeholder.
+        run: cp CHANGELOG.rst backend/CHANGELOG.rst
+      - name: System dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+              libxmlsec1-openssl \
+              libxmlsec1-dev \
+              libxml2-dev \
+              pkg-config
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version-file: backend/.python-version
+      - name: Resolve the application version
+        id: app-version
+        run: echo "value=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+      - name: Build the manual
+        working-directory: backend
+        env:
+          FLIGHTLOGS_APP_VERSION: ${{ steps.app-version.outputs.value }}
+        run: |
+          uv sync --locked
+          uv run sphinx-build docs/source docs/build
+      - name: Zip the manual
+        run: |
+          mkdir doc-dist-tmp
+          mv backend/docs/build doc-dist-tmp/docs
+          mkdir -p dist
+          (cd doc-dist-tmp && zip -r ../dist/docs.zip docs)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: documentation
+          path: dist/docs.zip
+
+  create-release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/release-')
+    needs:
+      - build-and-push
+      - build-documentation
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Resolve the release tag
+        id: release-tag
+        # The pushed image tag has the "release-" prefix stripped
+        # (docker/metadata-action's type=match), unlike github.ref_name.
+        run: echo "value=${GITHUB_REF_NAME#release-}" >> "$GITHUB_OUTPUT"
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: >-
+            ${{ secrets.DOCKER_REGISTRY_URL }}/${{
+            secrets.DOCKER_REGISTRY_NAMESPACE }}/flightlogs:${{
+            steps.release-tag.outputs.value }}
+          artifact-name: sbom.spdx.json
+          output-file: dist/sbom.spdx.json
+      - name: Extract release notes from CHANGELOG.rst
+        run: |
+          version="${GITHUB_REF_NAME#release-}"
+          awk -v want="$version" '
+            $0 == want { found = 1; next }
+            found && /^[0-9]{4}\.[0-9]{2}\.[0-9]{2}/ { exit }
+            found && !/^[-=~]+$/ { print }
+          ' CHANGELOG.rst > release-body.rst
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, 'rc') }}
+          make_latest: true
+          body_path: release-body.rst
+          files: dist/*

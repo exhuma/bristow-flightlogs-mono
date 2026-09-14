@@ -1,0 +1,45 @@
+---
+# Quality gate for the umbrella repo itself: does the Dockerfile still
+# build the combined image. Each submodule keeps its own lint/test/
+# type-check CI; this repo only builds and assembles, so this is the
+# only thing to check here.
+name: CI
+
+on:
+  pull_request: null
+  push:
+    branches:
+      - master
+  workflow_dispatch: null
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  image:
+    name: Image build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure submodule access
+        # .gitmodules uses SSH URLs (needed for local clones over an
+        # SSH agent). CI authenticates with a token instead, so git is
+        # told to rewrite the scheme rather than editing .gitmodules
+        # itself, which would break every local checkout.
+        run: |
+          git config --global \
+            url."https://x-access-token:${{ secrets.SUBMODULE_TOKEN }}@github.com/".insteadOf \
+            "git@github.com:"
+      - name: Checkout submodules
+        run: git submodule update --init --depth 1
+      - uses: arduino/setup-task@v3.0.0
+        with:
+          version: 3.53.1
+      - name: Build the image (no push)
+        # The exact command a local Dockerfile change is tested with,
+        # so this and a developer's own check never drift apart.
+        run: task image:build
