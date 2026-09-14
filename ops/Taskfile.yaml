@@ -1,0 +1,16 @@
+# Maintenance-operations tasks, run from inside the flightlogs-ops
+# image. Every task here is a thin wrapper over a standalone script
+# under /ops -- see backend's manual, "Maintenance Operations" page,
+# for what each script does and how to run it directly without task.
+version: "3"
+
+tasks:
+  backup:
+    desc: "Dump the database. Usage: task backup -- <db_container> <db_user> <db_name> [output_dir]"
+    cmds:
+      - /ops/backup.bash {{.CLI_ARGS}}
+
+  anonymise-dump:
+    desc: "Produce an anonymised database dump. Usage: task anonymise-dump -- <db_container> <db_user> <db_name> <output_file>"
+    cmds:
+      - /ops/anonymise-dump.bash {{.CLI_ARGS}}

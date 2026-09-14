@@ -75,6 +75,8 @@ in `.env` instead of killing other processes.
   together; `task dev:backend` / `task dev:frontend` individually.
 - `task test`, `task test:backend`, `task test:frontend`,
   `task typecheck:frontend`, `task lint:frontend`, `task check`.
+- `task image:build` — build the release image locally (no push).
+  Reads the product version from the root `VERSION` file.
 
 The Taskfile wires the two halves together in dev by starting the
 backend with `dev-auth.json` authentication (HTTP Basic with fake users
@@ -103,34 +105,74 @@ too.
 
 ## CI
 
-Each submodule has two workflows. They are per-repo: there is no
-umbrella-level CI, because it would need cross-repo tokens for two
-private submodules and would pin submodule SHAs that lag `develop`.
+There **is** umbrella-level CI now, reversing an earlier decision
+recorded in this file's history: the concern was that it "would need
+cross-repo tokens for two private submodules and would pin submodule
+SHAs that lag `develop`." Both are true, but for a *release build* a
+pinned pair of submodule SHAs is the entire point, not a drawback — the
+umbrella is the only repo that knows which pair shipped together, so it
+is the only repo that can build the one image correctly. Do not
+re-derive the old "no umbrella CI" conclusion from that same reasoning;
+it applied to quality gates, not to owning the release.
 
-- `ci.yml` — the quality gates. Runs on every pull request and on
-  pushes to `develop`, is `contents: read` throughout, and never
-  touches the container registry. This is what branch protection on
-  `develop` should require.
-- `release.yml` — builds and pushes the image, and creates the GitHub
-  release. Runs on `develop` and `release-*` tags only.
+Each submodule keeps its own `ci.yml`: quality gates only (lint,
+type-check, tests), `contents: read` throughout, no image build and no
+release pipeline. Neither submodule publishes a container image or
+tags its own release any more — see each repo's own CI for exactly
+what it still checks.
+
+The umbrella has two workflows:
+
+- `ci.yml` — checks out both submodules (a `SUBMODULE_TOKEN` secret
+  authenticates the checkout, since `.gitmodules` uses SSH URLs) and
+  runs `task image:build`: the image still builds. This is what
+  replaced each submodule's old PR-time "does the Dockerfile still
+  build" job, since the Dockerfile lives here now.
+- `release.yml` — on a `release-*` tag, builds and pushes **two**
+  images (the application, and `flightlogs-ops`, the maintenance-tools
+  image — see "Deployment and maintenance operations" below), builds
+  and zips the Sphinx manual, generates an SBOM, and creates the GitHub
+  release with notes extracted from this repo's own `CHANGELOG.rst`.
   `contents: write` is elevated on the release job alone.
 
-**CI runs the Taskfile's commands, not its own variants.** When you
-change a gate, change it in both places or they drift — that drift is
-what `task check` existed to prevent and previously did not. `task
-check` is the local equivalent of `ci.yml`: lint + type-check + tests
-for both halves.
+**CI runs the Taskfile's commands, not its own variants**, where a
+Taskfile command exists for the job — `task image:build` for the image,
+`task check` inside each submodule for its own quality gates. When you
+change one, change it in both places or they drift.
 
-Some jobs are deliberately advisory (`continue-on-error: true`)
-because their baselines are not yet clean: repo-wide mypy,
-`alembic check` drift, `sphinx -W`, bandit, pip-audit, npm audit and
-Trivy. Each carries a comment saying so. Promote one to blocking by
-deleting that line once its baseline is triaged — do not silence the
-finding instead.
+Some jobs are deliberately advisory (`continue-on-error: true`) because
+their baselines are not yet clean: repo-wide mypy, `alembic check`
+drift, `sphinx -W`, bandit, pip-audit, npm audit and Trivy. Each carries
+a comment saying so. Promote one to blocking by deleting that line once
+its baseline is triaged — do not silence the finding instead.
 
-There is no CodeQL: both repositories are private with code scanning
-disabled, so it requires paid GitHub Code Security and would fail with
-a 403 rather than report anything.
+There is no CodeQL: both submodule repositories are private with code
+scanning disabled, so it requires paid GitHub Code Security and would
+fail with a 403 rather than report anything.
+
+## Deployment and maintenance operations
+
+Deployment is a normal `docker compose` install against the released
+`flightlogs` image -- see the backend manual's "Installation" page for
+the operator-facing walkthrough. There is no Ansible any more (removed
+when direct SSH access to the deployment host was withdrawn); do not
+recreate it.
+
+Recurring maintenance -- database backup, an anonymised dump for use
+outside production -- is documented on the manual's "Maintenance
+Operations" page as small, dependency-free scripts under
+`backend/docs/source/maintenance/data/`. The `flightlogs-ops` image
+(built from `ops/Dockerfile`, published alongside the application image)
+wraps the two that only need Docker (`backup.bash`,
+`anonymise-dump.bash`) behind `task`, purely for convenience: it is not
+the only way to run them, and dropping it would not lose any
+capability. `upload-to-az.bash` is deliberately excluded -- it needs
+the Azure CLI, a dependency neither of the other two shares, and adding
+it would mean every user of the image carries that weight. Keep this
+image narrow: a script gaining logic that only exists inside the
+wrapper, rather than in the script itself, or a new script pulled in
+purely because it is convenient rather than because it shares the same
+dependencies, both defeat the reason this is a separate, minimal image.
 
 ## Backend summary
 
@@ -169,11 +211,13 @@ a 403 rather than report anything.
   advisory) with a strict opt-in allowlist under
   `[[tool.mypy.overrides]]`. That allowlist is green and blocks. Add a
   module to it when you next work on it.
-- Releases: CalVer (`YYYY.MM.DD` in `pyproject.toml`), newest-first
-  `CHANGELOG.rst`, tags `release-*`. CI refuses a `release-*` tag
-  whose name does not match the `pyproject.toml` version and have a
-  matching `CHANGELOG.rst` section, and builds the GitHub release body
-  from that section.
+- Releases, versioning and the changelog are **not** owned here any
+  more -- see "CI" above. `pyproject.toml`'s own `version` is frozen at
+  a placeholder; `Settings.app_version`
+  (`FLIGHTLOGS_APP_VERSION`, set by the umbrella's image build) is what
+  `FastAPI(version=)` and the Sphinx manual's `release` actually report
+  at runtime, falling back to the frozen placeholder for a standalone
+  checkout.
 
 ## Frontend summary
 

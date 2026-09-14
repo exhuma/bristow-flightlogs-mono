@@ -265,3 +265,18 @@ tasks:
       - task: lint
       - task: typecheck
       - task: test
+
+  image:build:
+    desc: >-
+      Build the release image locally (does not push). CI's
+      pull-request gate runs this exact command, so a Dockerfile
+      change is exercised the same way here and there.
+    vars:
+      APP_VERSION:
+        sh: cat VERSION
+    cmds:
+      - >-
+        docker build
+        --build-arg APP_VERSION={{.APP_VERSION}}
+        -t flightlogs:{{.APP_VERSION}}
+        .
