@@ -32,6 +32,12 @@ vars:
     | ternary "true" "false")}}
   TEST_DSN: >-
     postgresql://postgres-test:postgres-test@localhost:{{.TEST_DB_PORT}}/postgres-test
+  STACK_PORT: '{{.STACK_PORT | default "8220"}}'
+  STACK_DB_PORT: '{{.STACK_DB_PORT | default "8221"}}'
+  STACK_PROJECT: >-
+    {{.STACK_PROJECT | default (printf "%s-stack" .CONTAINER_PREFIX)}}
+  STACK_DSN: >-
+    postgresql://flightlogs:flightlogs@localhost:{{.STACK_DB_PORT}}/flightlogs
 
 includes:
   backend:
@@ -280,3 +286,57 @@ tasks:
         --build-arg APP_VERSION={{.APP_VERSION}}
         -t flightlogs:{{.APP_VERSION}}
         .
+
+  stack:up:
+    desc: >-
+      Build the release image and run it via docker compose alongside
+      a disposable PostgreSQL, for manual smoke-testing before a
+      release. Dev-auth (HTTP Basic) is enabled; seed data with
+      `task stack:seed`.
+    deps: [image:build]
+    vars:
+      APP_VERSION:
+        sh: cat VERSION
+    preconditions:
+      - sh: >-
+          ! (ss -tln | awk '{print $4}' | grep -q ':{{.STACK_PORT}}$')
+          || (docker ps --format '{{"{{"}}.Names{{"}}"}}'
+          | grep -qx '{{.STACK_PROJECT}}-api-1')
+        msg: >-
+          Port {{.STACK_PORT}} is already in use by something else.
+          Set STACK_PORT to a free port in .env (see .env.sample).
+      - sh: >-
+          ! (ss -tln | awk '{print $4}' | grep -q ':{{.STACK_DB_PORT}}$')
+          || (docker ps --format '{{"{{"}}.Names{{"}}"}}'
+          | grep -qx '{{.STACK_PROJECT}}-db-1')
+        msg: >-
+          Port {{.STACK_DB_PORT}} is already in use by something else.
+          Set STACK_DB_PORT to a free port in .env (see .env.sample).
+    env:
+      APP_VERSION: "{{.APP_VERSION}}"
+      STACK_PORT: "{{.STACK_PORT}}"
+      STACK_DB_PORT: "{{.STACK_DB_PORT}}"
+    cmds:
+      - >-
+        test -f backend/dev-auth.json ||
+        cp backend/dev-auth.json.dist backend/dev-auth.json
+      - >-
+        docker compose -f docker-compose.local.yml
+        -p '{{.STACK_PROJECT}}' up --detach --wait --wait-timeout 240
+
+  stack:down:
+    desc: Stop and remove the local smoke-test stack
+    cmds:
+      - >-
+        docker compose -f docker-compose.local.yml
+        -p '{{.STACK_PROJECT}}' down
+
+  stack:seed:
+    desc: >-
+      Wipe and repopulate the local smoke-test stack's database with
+      the same dev data `task db:seed` produces (reuses `backend:seed`
+      directly -- same mechanism, different DSN).
+    deps: [stack:up]
+    cmds:
+      - task: backend:seed
+        vars: { SEED_DSN: "{{.STACK_DSN}}" }

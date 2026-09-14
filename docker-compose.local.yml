@@ -1,0 +1,44 @@
+# Local smoke-test stack: runs the image built by `task image:build`
+# against a disposable PostgreSQL, with dev-auth (HTTP Basic) enabled
+# so it can be exercised without a real IdP. Not for production use --
+# see backend/docs/source/maintenance/data/docker-compose.yml for that.
+#
+# Invoke via `task stack:up` / `task stack:down` / `task stack:seed`,
+# not `docker compose` directly: those tasks export APP_VERSION (read
+# from the root VERSION file) and the STACK_*_PORT vars this file
+# interpolates. A bare `docker compose up` falls back to the
+# nonexistent tag `flightlogs:0.0.0`.
+
+services:
+  api:
+    image: flightlogs:${APP_VERSION:-0.0.0}
+    environment:
+      FLIGHTLOGS_DSN: postgresql://flightlogs:flightlogs@db/flightlogs
+      FLIGHTLOGS_ENVIRONMENT: development
+      FLIGHTLOGS_DEV_AUTH_FILE: /opt/flightlogs/dev-auth.json
+      FLIGHTLOGS_ADMIN_EMAIL: >-
+        ${FLIGHTLOGS_ADMIN_EMAIL:-admin@localhost.localdomain}
+    volumes:
+      - ./backend/dev-auth.json:/opt/flightlogs/dev-auth.json:ro
+    ports:
+      - "${STACK_PORT:-8220}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: flightlogs
+      POSTGRES_PASSWORD: flightlogs
+      POSTGRES_DB: flightlogs
+    ports:
+      - "${STACK_DB_PORT:-8221}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flightlogs -d flightlogs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No volume: disposable by design, matching db:up:test in the
+    # Taskfile. `task stack:seed` repopulates it after every
+    # `stack:up`.
