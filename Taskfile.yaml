@@ -34,6 +34,7 @@ vars:
     postgresql://postgres-test:postgres-test@localhost:{{.TEST_DB_PORT}}/postgres-test
   STACK_PORT: '{{.STACK_PORT | default "8220"}}'
   STACK_DB_PORT: '{{.STACK_DB_PORT | default "8221"}}'
+  STACK_IDP_PORT: '{{.STACK_IDP_PORT | default "8222"}}'
   STACK_PROJECT: >-
     {{.STACK_PROJECT | default (printf "%s-stack" .CONTAINER_PREFIX)}}
   STACK_DSN: >-
@@ -290,14 +291,21 @@ tasks:
   stack:up:
     desc: >-
       Build the release image and run it via docker compose alongside
-      a disposable PostgreSQL, for manual smoke-testing before a
-      release. Dev-auth (HTTP Basic) is enabled; seed data with
+      a disposable PostgreSQL and a mock OIDC provider, for manual
+      smoke-testing before a release. Log in and type "admin" at the
+      mock provider's login form for full access; seed data with
       `task stack:seed`.
     deps: [image:build]
     vars:
       APP_VERSION:
         sh: cat VERSION
     preconditions:
+      - sh: getent hosts host.docker.internal >/dev/null 2>&1
+        msg: >-
+          host.docker.internal doesn't resolve yet. The mock identity
+          provider needs it reachable from both the containers and
+          your browser. Add it once, then retry:
+          echo '127.0.0.1 host.docker.internal' | sudo tee -a /etc/hosts
       - sh: >-
           ! (ss -tln | awk '{print $4}' | grep -q ':{{.STACK_PORT}}$')
           || (docker ps --format '{{"{{"}}.Names{{"}}"}}'
@@ -312,14 +320,19 @@ tasks:
         msg: >-
           Port {{.STACK_DB_PORT}} is already in use by something else.
           Set STACK_DB_PORT to a free port in .env (see .env.sample).
+      - sh: >-
+          ! (ss -tln | awk '{print $4}' | grep -q ':{{.STACK_IDP_PORT}}$')
+          || (docker ps --format '{{"{{"}}.Names{{"}}"}}'
+          | grep -qx '{{.STACK_PROJECT}}-mock-idp-1')
+        msg: >-
+          Port {{.STACK_IDP_PORT}} is already in use by something else.
+          Set STACK_IDP_PORT to a free port in .env (see .env.sample).
     env:
       APP_VERSION: "{{.APP_VERSION}}"
       STACK_PORT: "{{.STACK_PORT}}"
       STACK_DB_PORT: "{{.STACK_DB_PORT}}"
+      STACK_IDP_PORT: "{{.STACK_IDP_PORT}}"
     cmds:
-      - >-
-        test -f backend/dev-auth.json ||
-        cp backend/dev-auth.json.dist backend/dev-auth.json
       - >-
         docker compose -f docker-compose.local.yml
         -p '{{.STACK_PROJECT}}' up --detach --wait --wait-timeout 240

@@ -1,0 +1,30 @@
+{
+  "interactiveLogin": true,
+  "tokenCallbacks": [
+    {
+      "issuerId": "default",
+      "requestMappings": [
+        {
+          "requestParam": "subject",
+          "match": "admin",
+          "claims": {
+            "sub": "admin",
+            "aud": ["${clientId}"],
+            "email": "admin@localhost.localdomain",
+            "name": "Admin User"
+          }
+        },
+        {
+          "requestParam": "subject",
+          "match": ".*",
+          "claims": {
+            "sub": "${subject}",
+            "aud": ["${clientId}"],
+            "email": "${subject}@localhost.localdomain",
+            "name": "${subject}"
+          }
+        }
+      ]
+    }
+  ]
+}

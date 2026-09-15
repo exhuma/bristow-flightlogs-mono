@@ -1,7 +1,19 @@
 # Local smoke-test stack: runs the image built by `task image:build`
-# against a disposable PostgreSQL, with dev-auth (HTTP Basic) enabled
-# so it can be exercised without a real IdP. Not for production use --
-# see backend/docs/source/maintenance/data/docker-compose.yml for that.
+# against a disposable PostgreSQL, for manual testing before a release.
+# Not for production use -- see
+# backend/docs/source/maintenance/data/docker-compose.yml for that.
+#
+# Authenticates via a mock OIDC provider (mock-idp), not dev-auth:
+# dev-auth cannot exist in this frontend's bundle by design -- it is
+# compiled out of every `vite build` output, unconditionally, so there
+# is nothing to enable here. Log in and type "admin" at the mock
+# provider's login form for full access (matches FLIGHTLOGS_ADMIN_EMAIL
+# below); any other name signs in with no permissions at all, useful
+# for exercising a restricted account through the real OIDC path.
+#
+# One-time host setup: the sign-in popup needs "host.docker.internal"
+# to resolve from your browser, not just from inside the containers.
+# `task stack:up` checks this and tells you the fix if it's missing.
 #
 # Invoke via `task stack:up` / `task stack:down` / `task stack:seed`,
 # not `docker compose` directly: those tasks export APP_VERSION (read
@@ -15,15 +27,24 @@ services:
     environment:
       FLIGHTLOGS_DSN: postgresql://flightlogs:flightlogs@db/flightlogs
       FLIGHTLOGS_ENVIRONMENT: development
-      FLIGHTLOGS_DEV_AUTH_FILE: /opt/flightlogs/dev-auth.json
+      FLIGHTLOGS_OIDC_AUTHORITY: >-
+        http://host.docker.internal:${STACK_IDP_PORT:-8222}/default
+      FLIGHTLOGS_OIDC_CLIENT_ID: flight-logs-web
       FLIGHTLOGS_ADMIN_EMAIL: >-
         ${FLIGHTLOGS_ADMIN_EMAIL:-admin@localhost.localdomain}
-    volumes:
-      - ./backend/dev-auth.json:/opt/flightlogs/dev-auth.json:ro
+    # "host-gateway" is what makes host.docker.internal resolve from
+    # inside this container -- verified empirically: a service's own
+    # `hostname:` setting does NOT make other containers resolve that
+    # name to it, so this (not anything on mock-idp) is the mechanism.
+    # Without it, msal.py's JWKS fetch would fail outright.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${STACK_PORT:-8220}:8000"
     depends_on:
       db:
+        condition: service_healthy
+      mock-idp:
         condition: service_healthy
 
   db:
@@ -42,3 +63,29 @@ services:
     # No volume: disposable by design, matching db:up:test in the
     # Taskfile. `task stack:seed` repopulates it after every
     # `stack:up`.
+
+  mock-idp:
+    image: ghcr.io/navikt/mock-oauth2-server:6.0.2
+    # Reached via api's extra_hosts (host.docker.internal -> the host
+    # gateway) plus the port published below, and via the browser's own
+    # /etc/hosts entry pointing the same name at 127.0.0.1 -- both paths
+    # go through this published port, landing on the same discovery
+    # document and the same issuer string either way.
+    volumes:
+      - ./mock-idp/config.json:/app/config.json:ro
+    environment:
+      JSON_CONFIG_PATH: /app/config.json
+    ports:
+      - "${STACK_IDP_PORT:-8222}:8080"
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --no-verbose
+        - --tries=1
+        - --spider
+        - http://localhost:8080/isalive
+      start_period: 5s
+      interval: 2s
+      timeout: 1s
+      retries: 10
